@@ -1,6 +1,31 @@
 var Clay = require('@rebble/clay');
 var clayConfig = require('./config.js');
-var clay = new Clay(clayConfig);
+
+// Injected into the config page via toString (self-contained bodies only;
+// `this` is the in-page ClayConfig): hide the CHIME_TEST flag input, and wire
+// the test button to raise the flag and submit the form, so the ordinary
+// webviewclosed path carries the flag to the watch.
+function customFn(minified) {
+  var clayConfig = this;
+  clayConfig.on(clayConfig.EVENTS.AFTER_BUILD, function() {
+    clayConfig.getItemByMessageKey('CHIME_TEST').hide();
+    clayConfig.getItemById('test-sound').on('click', function() {
+      clayConfig.getItemByMessageKey('CHIME_TEST').set('1');
+      minified.$('#main-form').trigger('submit');
+    });
+  });
+}
+
+var clay = new Clay(clayConfig, customFn);
+
+// The constructor registered Clay's webviewclosed handler first (handlers run
+// in registration order), so by now the button press has flown to the watch
+// as CHIME_TEST=1 and landed in localStorage. Stamp the flag back to 0, or
+// the next plain "Save Settings" would re-beep.
+Pebble.addEventListener('webviewclosed', function(e) {
+  if (!e || !e.response) return;
+  clay.setSettings('CHIME_TEST', 0);
+});
 
 var weather = require('./weather.js');
 

@@ -72,6 +72,8 @@ const EXPECTED_PERSIST = new Map([
   ['SETTINGS_WEATHER_WINDOW', 'PERSIST_KEY_SETTINGS_WEATHER_WINDOW'],
   ['SETTINGS_CRT', 'PERSIST_KEY_SETTINGS_CRT'],
   ['SETTINGS_CRT_SOUND', 'PERSIST_KEY_SETTINGS_CRT_SOUND'],
+  ['SETTINGS_HOURLY_CHIME', 'PERSIST_KEY_SETTINGS_HOURLY_CHIME'],
+  ['SETTINGS_CHIME_VOLUME', 'PERSIST_KEY_SETTINGS_CHIME_VOLUME'],
   ['SLOT_1', 'PERSIST_KEY_SLOT_1'],
   ['SLOT_2', 'PERSIST_KEY_SLOT_2'],
   ['SLOT_3', 'PERSIST_KEY_SLOT_3'],
@@ -235,6 +237,9 @@ const EXPECTED_SETTINGS_OPTIONS = {
     ['12', '12 hours'],
     ['24', '24 hours'],
   ],
+  SETTINGS_HOURLY_CHIME: [['1', 'On'], ['0', 'Off']],
+  SETTINGS_CHIME_VOLUME:
+      [['5', '5%'], ['10', '10%'], ['25', '25%'], ['50', '50%'], ['75', '75%'], ['100', '100%']],
 };
 
 test('every settings select offers exactly the pinned value ↔ label pairs', () => {
@@ -270,12 +275,15 @@ test('the units select\'s values carry the same semantics as data.h\'s defines',
 });
 
 test('the C boot defaults equal the Clay shipped defaults', () => {
-  const boots = scrape.cBootDefaults();  // 12 entries; the scraper asserts its own coverage
+  const boots = scrape.cBootDefaults();  // 14 entries; the scraper asserts its own coverage
   const shipped = new Map();
   for (const section of config) {
     for (const item of section.items || []) {
       if (item.messageKey) shipped.set(item.messageKey, String(item.defaultValue));
     }
   }
+  // CHIME_TEST is an action flag with no C-side setting to boot from; pinned
+  // in config.test.js instead.
+  shipped.delete('CHIME_TEST');
   assert.deepEqual(shipped, boots);
 });

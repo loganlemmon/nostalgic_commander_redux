@@ -40,6 +40,9 @@ uint32_t MESSAGE_KEY_WEATHER_WIND_SPEED = 132;
 uint32_t MESSAGE_KEY_WEATHER_REQUEST = 133;
 uint32_t MESSAGE_KEY_SETTINGS_CRT = 135;
 uint32_t MESSAGE_KEY_SETTINGS_CRT_SOUND = 136;
+uint32_t MESSAGE_KEY_SETTINGS_HOURLY_CHIME = 137;
+uint32_t MESSAGE_KEY_SETTINGS_CHIME_VOLUME = 138;
+uint32_t MESSAGE_KEY_CHIME_TEST = 139;
 
 // Implementations
 void app_event_loop(void) {}
@@ -630,6 +633,21 @@ time_t time_start_of_today(void) {
   return now - (time_t)(lt->tm_hour * 3600 + lt->tm_min * 60 + lt->tm_sec);
 }
 
+int mock_speaker_tone_count = 0;
+uint16_t mock_speaker_tone_freq_hz = 0;
+uint32_t mock_speaker_tone_duration_ms = 0;
+uint8_t mock_speaker_tone_volume = 0;
+SpeakerWaveform mock_speaker_tone_waveform = SpeakerWaveformSine;
+bool speaker_play_tone(uint16_t frequency_hz, uint32_t duration_ms, uint8_t volume,
+                       SpeakerWaveform waveform) {
+  mock_speaker_tone_count++;
+  mock_speaker_tone_freq_hz = frequency_hz;
+  mock_speaker_tone_duration_ms = duration_ms;
+  mock_speaker_tone_volume = volume;
+  mock_speaker_tone_waveform = waveform;
+  return true;
+}
+
 Window* window_create(void) {
   return NULL;
 }
@@ -685,6 +703,11 @@ void mock_reset(void) {
   mock_health_sum_today_count = 0;
   mock_health_peek_count = 0;
   mock_health_values_reset();
+  mock_speaker_tone_count = 0;
+  mock_speaker_tone_freq_hz = 0;
+  mock_speaker_tone_duration_ms = 0;
+  mock_speaker_tone_volume = 0;
+  mock_speaker_tone_waveform = SpeakerWaveformSine;
   mock_mark_dirty_count = 0;
   mock_set_hidden_count = 0;
   mock_set_text_count = 0;

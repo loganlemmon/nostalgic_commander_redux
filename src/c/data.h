@@ -131,6 +131,8 @@ extern int s_settings_crt_sound;
 // Persisted like the other settings but read only phone-side: it sizes the
 // reduction window for the UV/PCP maxima, which happens before the wire.
 extern int s_settings_weather_window;
+extern int s_settings_hourly_chime;
+extern int s_settings_chime_volume;
 
 // Face geometry (margins, slot rects, TIME window, clock layer) lives in
 // layout.h.

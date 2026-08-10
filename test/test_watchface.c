@@ -9,6 +9,7 @@
 #include "../src/c/drawing.c"
 #include "../src/c/messaging.c"
 #include "../src/c/crt.c"
+#include "../src/c/chime.c"
 #include "../src/c/main.c"
 
 void tearDown(void) {}
@@ -47,6 +48,8 @@ static void reset_all_state(void) {
   s_settings_weather_window = 12;
   s_settings_crt = 0;
   s_settings_crt_sound = 0;
+  s_settings_hourly_chime = 0;
+  s_settings_chime_volume = CHIME_DEFAULT_VOLUME;
   // Regenerable content cache: reset so a first-use test doesn't inherit one.
   s_strike_pcm_ready = false;
   memset(s_strike_pcm, 0, sizeof(s_strike_pcm));
@@ -3286,6 +3289,44 @@ void test_inbox_should_parse_the_newer_settings_and_centre_slot(void) {
   TEST_ASSERT_EQUAL_INT(DATA_SOURCE_STEPS_BAR, s_complication_slots[5].source);
 }
 
+void test_inbox_should_parse_and_persist_hourly_chime_setting(void) {
+  mock_persist_reset();
+  mock_dict_reset();
+  mock_dict_add_int(MESSAGE_KEY_SETTINGS_HOURLY_CHIME, 1);
+  inbox_received_callback(NULL, NULL);
+  TEST_ASSERT_EQUAL_INT(1, s_settings_hourly_chime);
+  TEST_ASSERT_EQUAL_INT(1, persist_read_int(PERSIST_KEY_SETTINGS_HOURLY_CHIME));
+
+  mock_dict_reset();
+  mock_dict_add_int(MESSAGE_KEY_SETTINGS_HOURLY_CHIME, 0);
+  inbox_received_callback(NULL, NULL);
+  TEST_ASSERT_EQUAL_INT(0, s_settings_hourly_chime);
+  TEST_ASSERT_EQUAL_INT(0, persist_read_int(PERSIST_KEY_SETTINGS_HOURLY_CHIME));
+
+  s_settings_hourly_chime = 1;
+  load_settings();
+  TEST_ASSERT_EQUAL_INT(0, s_settings_hourly_chime);
+}
+
+void test_inbox_should_parse_and_persist_chime_volume_setting(void) {
+  mock_persist_reset();
+  mock_dict_reset();
+  mock_dict_add_cstring(MESSAGE_KEY_SETTINGS_CHIME_VOLUME, "75");  // Clay sends strings
+  inbox_received_callback(NULL, NULL);
+  TEST_ASSERT_EQUAL_INT(75, s_settings_chime_volume);
+  TEST_ASSERT_EQUAL_INT(75, persist_read_int(PERSIST_KEY_SETTINGS_CHIME_VOLUME));
+
+  mock_dict_reset();
+  mock_dict_add_cstring(MESSAGE_KEY_SETTINGS_CHIME_VOLUME, "25");
+  inbox_received_callback(NULL, NULL);
+  TEST_ASSERT_EQUAL_INT(25, s_settings_chime_volume);
+  TEST_ASSERT_EQUAL_INT(25, persist_read_int(PERSIST_KEY_SETTINGS_CHIME_VOLUME));
+
+  s_settings_chime_volume = 100;
+  load_settings();
+  TEST_ASSERT_EQUAL_INT(25, s_settings_chime_volume);
+}
+
 void test_inbox_units_change_should_trigger_weather_refetch(void) {
   mock_persist_reset();
 
@@ -3383,6 +3424,128 @@ void test_refresh_state_should_keep_date_output_when_nothing_changes(void) {
   refresh_state();
   TEST_ASSERT_EQUAL_STRING(once, s_date_display);
   TEST_ASSERT_EQUAL_STRING(once_short, s_short_date_display);
+}
+
+void test_chime_gate_should_fire_only_on_the_hour_when_enabled_and_unmuted(void) {
+  TEST_ASSERT_TRUE(chime_should_play(0, 1, false));
+  TEST_ASSERT_FALSE(chime_should_play(0, 1, true));
+  TEST_ASSERT_FALSE(chime_should_play(0, 0, false));
+  TEST_ASSERT_FALSE(chime_should_play(29, 1, false));
+}
+
+void test_chime_should_beep_the_post_tone_once_at_the_full_hour(void) {
+  s_settings_hourly_chime = 1;
+
+  struct tm t = {0};
+  tick_handler(&t, MINUTE_UNIT);
+  TEST_ASSERT_EQUAL_INT(1, mock_speaker_tone_count);
+  TEST_ASSERT_EQUAL_UINT16(896, mock_speaker_tone_freq_hz);
+  TEST_ASSERT_EQUAL_UINT32(500, mock_speaker_tone_duration_ms);
+  TEST_ASSERT_EQUAL_UINT8(5, mock_speaker_tone_volume);
+  TEST_ASSERT_EQUAL_INT(SpeakerWaveformSquare, mock_speaker_tone_waveform);
+}
+
+void test_chime_should_stay_silent_when_the_setting_is_off(void) {
+  // The settings select ships '0' — no sound on the full hour by default.
+  struct tm t = {0};
+  tick_handler(&t, MINUTE_UNIT);
+  TEST_ASSERT_EQUAL_INT(0, mock_speaker_tone_count);
+}
+
+void test_chime_should_stay_silent_off_the_full_hour(void) {
+  s_settings_hourly_chime = 1;
+
+  struct tm t = {0};
+  t.tm_min = 13;
+  tick_handler(&t, MINUTE_UNIT);
+  TEST_ASSERT_EQUAL_INT(0, mock_speaker_tone_count);
+}
+
+void test_chime_should_stay_silent_when_the_speaker_is_muted(void) {
+  s_settings_hourly_chime = 1;
+  mock_speaker_muted = true;
+
+  struct tm t = {0};
+  tick_handler(&t, MINUTE_UNIT);
+  TEST_ASSERT_EQUAL_INT(0, mock_speaker_tone_count);
+}
+
+void test_chime_should_use_the_configured_volume(void) {
+  s_settings_hourly_chime = 1;
+  s_settings_chime_volume = 75;
+
+  struct tm t = {0};
+  tick_handler(&t, MINUTE_UNIT);
+  TEST_ASSERT_EQUAL_INT(1, mock_speaker_tone_count);
+  TEST_ASSERT_EQUAL_UINT8(75, mock_speaker_tone_volume);
+}
+
+void test_chime_should_clamp_the_configured_volume_to_the_sdk_range(void) {
+  s_settings_hourly_chime = 1;
+  struct tm t = {0};
+
+  s_settings_chime_volume = 200;  // settings write arbitrary ints
+  tick_handler(&t, MINUTE_UNIT);
+  TEST_ASSERT_EQUAL_UINT8(100, mock_speaker_tone_volume);
+
+  s_settings_chime_volume = -10;
+  tick_handler(&t, MINUTE_UNIT);
+  TEST_ASSERT_EQUAL_UINT8(0, mock_speaker_tone_volume);
+}
+
+void test_chime_effective_volume_matrix(void) {
+  // Clamp-only: pass through in-range, cap at the SDK's 0..100.
+  TEST_ASSERT_EQUAL_INT(0, chime_effective_volume(-10));
+  TEST_ASSERT_EQUAL_INT(25, chime_effective_volume(25));
+  TEST_ASSERT_EQUAL_INT(50, chime_effective_volume(50));
+  TEST_ASSERT_EQUAL_INT(70, chime_effective_volume(70));
+  TEST_ASSERT_EQUAL_INT(85, chime_effective_volume(85));
+  TEST_ASSERT_EQUAL_INT(100, chime_effective_volume(200));
+}
+
+void test_inbox_chime_test_should_beep_once_at_the_volume_in_the_same_dict(void) {
+  // The test button submits the whole Clay form, so CHIME_TEST arrives next to
+  // the (possibly fresh) SETTINGS_CHIME_VOLUME. The watch must apply the volume
+  // in the settings walk first, then beep at it — a branch placed before the
+  // walk would beep at the stale volume.
+  mock_persist_reset();
+  mock_dict_reset();
+  mock_dict_add_cstring(MESSAGE_KEY_SETTINGS_CHIME_VOLUME, "75");  // Clay sends strings
+  mock_dict_add_cstring(MESSAGE_KEY_CHIME_TEST, "1");
+  inbox_received_callback(NULL, NULL);
+  TEST_ASSERT_EQUAL_INT(1, mock_speaker_tone_count);
+  TEST_ASSERT_EQUAL_UINT8(75, mock_speaker_tone_volume);
+  TEST_ASSERT_EQUAL_UINT16(896, mock_speaker_tone_freq_hz);
+  TEST_ASSERT_EQUAL_UINT32(500, mock_speaker_tone_duration_ms);
+  TEST_ASSERT_EQUAL_INT(SpeakerWaveformSquare, mock_speaker_tone_waveform);
+  // CHIME_TEST is an action, not a setting: it must never persist.
+  TEST_ASSERT_EQUAL_INT(1, mock_persist_write_count);  // the volume write, nothing else
+}
+
+void test_inbox_should_never_beep_on_a_plain_save(void) {
+  // A settings-only dict without CHIME_TEST, and — the steady state after the
+  // JS side stamps the flag back to '0' — CHIME_TEST explicitly '0': neither
+  // may sound, or every ordinary Save Settings would beep.
+  mock_dict_reset();
+  mock_dict_add_cstring(MESSAGE_KEY_SETTINGS_HOURLY_CHIME, "1");
+  inbox_received_callback(NULL, NULL);
+  TEST_ASSERT_EQUAL_INT(0, mock_speaker_tone_count);
+
+  mock_dict_reset();
+  mock_dict_add_cstring(MESSAGE_KEY_SETTINGS_HOURLY_CHIME, "1");
+  mock_dict_add_cstring(MESSAGE_KEY_CHIME_TEST, "0");
+  inbox_received_callback(NULL, NULL);
+  TEST_ASSERT_EQUAL_INT(0, mock_speaker_tone_count);
+}
+
+void test_inbox_chime_test_should_bypass_mute(void) {
+  // Owner decision: the test tone ignores speaker_is_muted() — the user asked
+  // for the beep explicitly; a silent test reads as broken.
+  mock_speaker_muted = true;
+  mock_dict_reset();
+  mock_dict_add_cstring(MESSAGE_KEY_CHIME_TEST, "1");
+  inbox_received_callback(NULL, NULL);
+  TEST_ASSERT_EQUAL_INT(1, mock_speaker_tone_count);
 }
 
 void test_tick_handler_should_refresh_quiet_time_state(void) {
@@ -4522,6 +4685,8 @@ int main(void) {
   RUN_TEST(test_inbox_settings_only_message_should_not_stamp_weather_cache);
   RUN_TEST(test_inbox_should_parse_slot_assignments);
   RUN_TEST(test_inbox_should_parse_the_newer_settings_and_centre_slot);
+  RUN_TEST(test_inbox_should_parse_and_persist_hourly_chime_setting);
+  RUN_TEST(test_inbox_should_parse_and_persist_chime_volume_setting);
   RUN_TEST(test_inbox_units_change_should_trigger_weather_refetch);
   RUN_TEST(test_inbox_weather_window_change_should_trigger_weather_refetch);
   RUN_TEST(test_refresh_state_should_never_request_weather);
@@ -4529,6 +4694,17 @@ int main(void) {
   RUN_TEST(test_refresh_state_should_refresh_the_hi_lo_phase_hour);
   RUN_TEST(test_refresh_state_should_reformat_the_date_when_settings_change);
   RUN_TEST(test_refresh_state_should_keep_date_output_when_nothing_changes);
+  RUN_TEST(test_chime_gate_should_fire_only_on_the_hour_when_enabled_and_unmuted);
+  RUN_TEST(test_chime_should_beep_the_post_tone_once_at_the_full_hour);
+  RUN_TEST(test_chime_should_stay_silent_when_the_setting_is_off);
+  RUN_TEST(test_chime_should_stay_silent_off_the_full_hour);
+  RUN_TEST(test_chime_should_stay_silent_when_the_speaker_is_muted);
+  RUN_TEST(test_chime_should_use_the_configured_volume);
+  RUN_TEST(test_chime_should_clamp_the_configured_volume_to_the_sdk_range);
+  RUN_TEST(test_chime_effective_volume_matrix);
+  RUN_TEST(test_inbox_chime_test_should_beep_once_at_the_volume_in_the_same_dict);
+  RUN_TEST(test_inbox_should_never_beep_on_a_plain_save);
+  RUN_TEST(test_inbox_chime_test_should_bypass_mute);
   RUN_TEST(test_tick_handler_should_refresh_quiet_time_state);
   RUN_TEST(test_tick_handler_should_request_weather_on_the_half_hour_edge);
   RUN_TEST(test_tick_handler_should_skip_weather_with_no_weather_slots);

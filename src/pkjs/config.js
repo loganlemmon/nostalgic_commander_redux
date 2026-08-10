@@ -102,6 +102,29 @@ module.exports = [
                      ['0', 'Before date (THU 1970-12-31)'], ['1', 'After date (1970-12-31 THU)'],
                      ['2', 'Hidden (1970-12-31)']
                    ])),
+            select(
+                'SETTINGS_HOURLY_CHIME', 'Hourly chime (POST beep)', '0',
+                labeledOptions([['1', 'On'], ['0', 'Off']])),
+            select('SETTINGS_CHIME_VOLUME', 'Chime volume', '5', labeledOptions([
+                     ['5', '5%'], ['10', '10%'], ['25', '25%'], ['50', '50%'], ['75', '75%'],
+                     ['100', '100%']
+                   ])),
+            // The test button's flag. Keyed so Clay serializes it (the input
+            // manipulator is .val); hidden on the page by index.js's customFn.
+            {
+              type : 'input',
+              messageKey : 'CHIME_TEST',
+              defaultValue : '0',
+            },
+            // No messageKey here, on purpose: the button manipulator's value
+            // is the button's innerHTML — a key would send the caption text
+            // to the watch. index.js's customFn wires the click instead.
+            {
+              type : 'button',
+              id : 'test-sound',
+              defaultValue : 'Test sound',
+              description : 'Closes this page and beeps the watch at the saved chime volume',
+            },
           ],
   },
   {

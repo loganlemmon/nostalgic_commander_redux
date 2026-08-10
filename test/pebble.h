@@ -257,6 +257,9 @@ extern uint32_t MESSAGE_KEY_WEATHER_WIND_SPEED;
 extern uint32_t MESSAGE_KEY_WEATHER_REQUEST;
 extern uint32_t MESSAGE_KEY_SETTINGS_CRT;
 extern uint32_t MESSAGE_KEY_SETTINGS_CRT_SOUND;
+extern uint32_t MESSAGE_KEY_SETTINGS_HOURLY_CHIME;
+extern uint32_t MESSAGE_KEY_SETTINGS_CHIME_VOLUME;
+extern uint32_t MESSAGE_KEY_CHIME_TEST;
 
 // Handler typedefs and result types, spelled as the SDK umbrella header has
 // them so prototypes below can match the SDK verbatim.
@@ -417,6 +420,11 @@ extern bool mock_battery_charging;
 extern bool mock_bt_connected;
 extern bool mock_clock_24h;
 extern bool mock_outbox_begin_ok;
+extern int mock_speaker_tone_count;
+extern uint16_t mock_speaker_tone_freq_hz;
+extern uint32_t mock_speaker_tone_duration_ms;
+extern uint8_t mock_speaker_tone_volume;
+extern SpeakerWaveform mock_speaker_tone_waveform;
 extern int mock_outbox_sends;
 extern int mock_mark_dirty_count;
 extern int mock_set_hidden_count;
@@ -491,6 +499,9 @@ void text_layer_set_background_color(TextLayer* text_layer, GColor color);
 void text_layer_set_font(TextLayer* text_layer, GFont font);
 void text_layer_set_text(TextLayer* text_layer, const char* text);
 void text_layer_set_text_alignment(TextLayer* text_layer, GTextAlignment text_alignment);
+bool speaker_is_muted(void);
+bool speaker_play_tone(uint16_t frequency_hz, uint32_t duration_ms, uint8_t volume,
+                       SpeakerWaveform waveform);
 void text_layer_set_text_color(TextLayer* text_layer, GColor color);
 void tick_timer_service_subscribe(TimeUnits tick_units, TickHandler handler);
 void unobstructed_area_service_subscribe(UnobstructedAreaHandlers handlers, void* context);

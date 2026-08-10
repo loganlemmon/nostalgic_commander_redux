@@ -3,6 +3,17 @@
 Bugs and suspect behavior, ordered roughly by user impact. Approved upcoming
 work lives in [TODOs.md](TODOs.md); unvetted ideas in [IDEAS.md](IDEAS.md).
 
+## Chime arrives as a click plus the tone below 100% volume — stock PebbleOS bug
+
+On volumes under 100 the beep comes out as a loud click followed by the
+quieter tone ("BE-BOOP"). Root cause is `audec_start()` in PebbleOS
+(`src/fw/drivers/speaker/sf32lb52/audec.c`): the requested digital volume is
+applied only after the DAC path is already un-muted, so the codec power-up
+transients always leave at full gain; only at 100 does the tone itself mask
+them. Fix prepared in the firmware tree (`drivers/speaker: apply volume
+before un-muting the DAC path`, in flight upstream). The face applies no
+workaround — on stock firmware, 100% volume is clean.
+
 ## BPM trails the Health app — accepted, not a bug
 
 `update_health_info()` reads `HealthMetricHeartRateBPM`, which the SDK defines as

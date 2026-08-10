@@ -59,6 +59,9 @@ int s_settings_dow_position = 0;       // 0 = Before, 1 = After, 2 = Hidden
 int s_settings_weather_window = 12;    // hours ahead; 0 = in-progress hour only ("Now")
 int s_settings_crt = 0;                // 1 = CRT effect on (default off)
 int s_settings_crt_sound = 0;          // 1 = degauss sound at backlight-on (off by default)
+int s_settings_hourly_chime = 0;       // 1 = POST beep on the hour, 0 = silenced (default)
+int s_settings_chime_volume =
+    5;  // CHIME_DEFAULT_VOLUME; the JS defaults scrape parses this literal
 
 ComplicationSlot s_complication_slots[NUM_SLOTS] = {
     [SLOT_IDX_TOP_LEFT] = {.box_rect = SLOT_RECT_TOP_LEFT, .source = DATA_SOURCE_WEATHER},

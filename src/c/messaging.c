@@ -2,6 +2,7 @@
 #include "messaging.h"
 #include "data.h"
 #include "complication.h"
+#include "chime.h"
 #include "main.h"
 #include "crt.h"
 
@@ -102,6 +103,10 @@ static const MessageField s_settings_fields[] = {
      &s_settings_weather_window, 0},
     {&MESSAGE_KEY_SETTINGS_CRT, PERSIST_KEY_SETTINGS_CRT, &s_settings_crt, 0},
     {&MESSAGE_KEY_SETTINGS_CRT_SOUND, PERSIST_KEY_SETTINGS_CRT_SOUND, &s_settings_crt_sound, 0},
+    {&MESSAGE_KEY_SETTINGS_HOURLY_CHIME, PERSIST_KEY_SETTINGS_HOURLY_CHIME,
+     &s_settings_hourly_chime, 0},
+    {&MESSAGE_KEY_SETTINGS_CHIME_VOLUME, PERSIST_KEY_SETTINGS_CHIME_VOLUME,
+     &s_settings_chime_volume, 0},
 };
 
 // The slot persist keys are deliberately not sequential (SLOT_6 landed after
@@ -249,6 +254,16 @@ void inbox_received_callback(DictionaryIterator* iterator, void* context) {
       crt_apply_setting_change();
     }
     persist_write_int_if_changed(s_settings_fields[i].persist_key, *s_settings_fields[i].target);
+  }
+
+  // Action key: the settings page's test button. An action, not a setting —
+  // no persist key, no s_settings_* global. Deliberately bypasses
+  // speaker_is_muted(): the user asked for the beep explicitly, a silent test
+  // reads as broken. After the settings walk so the volume shipped in the same
+  // dict (the button submits the whole form) is already applied.
+  Tuple* test_tuple = dict_find(iterator, MESSAGE_KEY_CHIME_TEST);
+  if (test_tuple && tuple_get_int(test_tuple)) {
+    chime_play();
   }
 
   // Assigning or rearranging slots has to fetch now, or a newly shown weather

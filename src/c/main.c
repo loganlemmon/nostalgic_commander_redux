@@ -6,6 +6,7 @@
 #include "drawing.h"
 #include "messaging.h"
 #include "crt.h"
+#include "chime.h"
 
 // The window, the canvas everything draws on, and the clock row — owned here,
 // with lifecycle. drawing.c/the drawers read the handles via drawing.h/main.h.
@@ -180,6 +181,7 @@ static void tick_handler(struct tm* tick_time, TimeUnits units_changed) {
   if (tick_time->tm_min % 30 == 0 && any_slot_needs_weather()) {
     request_weather();
   }
+  chime_on_tick(tick_time);
 }
 
 // A weather request that loses the race with the phone's JS runtime is
