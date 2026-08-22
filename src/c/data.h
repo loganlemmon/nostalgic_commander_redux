@@ -122,7 +122,6 @@ extern int s_settings_units;
 extern int s_settings_date_format;
 extern int s_settings_short_date_format;
 extern int s_settings_dow_position;
-extern int s_settings_disconnect_vibe;
 // The CRT overlay (curvature + aberration + warm-up flash); 1 = on. Visual
 // only — it never changes what any slot monitors.
 extern int s_settings_crt;

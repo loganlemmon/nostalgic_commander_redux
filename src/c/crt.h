@@ -5,9 +5,10 @@
 // The CRT effect lives entirely here: a full-screen overlay layer stacked
 // above the clock whose update proc captures the framebuffer (the public
 // graphics_capture_frame_buffer API) and runs a per-pixel pass — a software
-// "shader": vignette curvature falloff with ordered dithering, chromatic
-// aberration, a pincushion warp, and the backlight warm-up flash as a
-// vignette modulation. The toggle gates the pass; off means the proc returns
+// "shader". Stage order: 1) chromatic aberration, 2) vignette + dither (dims
+// the image in content space so the rim bends with it), 3) curvature — the
+// pincushion warp, and the degauss strike's row jitter rides the same
+// sampling stage. The toggle gates the pass; off means the proc returns
 // before capturing, so the effect costs exactly nothing.
 //
 // main.c owns the layer's lifecycle (create/stack/destroy), like the canvas;
@@ -22,6 +23,12 @@ extern Layer* s_crt_layer;
 #define CRT_CORNER_RADIUS 14
 #define CRT_WARP_MAX_PX 5
 #define CRT_CA_MAX_SHIFT 3
+// CA is silent inside this radius (Q8 of the squared normalized distance;
+// 8 keeps the fringes off the centred text, on at the slot-frame scale).
+#define CRT_CA_START_Q8 8
+// Flat additive lift after the onset remap — pushes shift 1 into the
+// mid-column rows without changing the corner max.
+#define CRT_CA_LIFT_Q8 32
 
 // The wake-up: a degauss strike. On backlight-on, FRAMES 50ms ticks of
 // per-row horizontal jitter with decaying amplitude plus amplified channel

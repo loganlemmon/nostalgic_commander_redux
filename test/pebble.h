@@ -280,8 +280,30 @@ typedef struct PACKED {
   uint8_t reserved;
 } SpeakerNote;
 
-bool speaker_play_notes(const SpeakerNote* notes, uint32_t num_notes, uint8_t volume);
 bool speaker_is_muted(void);
+
+typedef enum {
+  SpeakerPcmFormat_8kHz_8bit = 0,
+  SpeakerPcmFormat_16kHz_8bit,
+  SpeakerPcmFormat_8kHz_16bit,
+  SpeakerPcmFormat_16kHz_16bit,
+} SpeakerPcmFormat;
+
+typedef struct {
+  const void* data;
+  uint32_t num_bytes;
+  SpeakerPcmFormat format;
+  uint8_t base_midi_note;
+  bool loop;
+} SpeakerSample;
+
+typedef struct {
+  const SpeakerNote* notes;
+  uint32_t num_notes;
+  const SpeakerSample* sample;
+} SpeakerTrack;
+
+bool speaker_play_tracks(const SpeakerTrack* tracks, uint32_t num_tracks, uint8_t volume);
 
 typedef void (*BatteryStateHandler)(BatteryChargeState charge);
 typedef void (*HealthEventHandler)(HealthEventType event, void* context);
@@ -379,7 +401,6 @@ extern bool mock_battery_charging;
 extern bool mock_bt_connected;
 extern bool mock_clock_24h;
 extern bool mock_outbox_begin_ok;
-extern int mock_vibes_count;
 extern int mock_outbox_sends;
 extern int mock_mark_dirty_count;
 extern int mock_set_text_count;
@@ -408,8 +429,8 @@ extern int mock_fb_capture_count;
 extern int mock_fb_release_count;
 extern int mock_window_set_bg_count;
 extern bool mock_speaker_muted;
-extern int mock_speaker_play_notes_count;
-extern uint32_t mock_speaker_last_num_notes;
+extern int mock_speaker_play_tracks_count;
+extern uint32_t mock_speaker_last_num_tracks;
 extern uint8_t mock_speaker_last_volume;
 extern int mock_inbox_received_count;
 extern int mock_inbox_dropped_count;
@@ -453,7 +474,6 @@ void text_layer_set_text_color(TextLayer* text_layer, GColor color);
 void tick_timer_service_subscribe(TimeUnits tick_units, TickHandler handler);
 void unobstructed_area_service_subscribe(UnobstructedAreaHandlers handlers, void* context);
 time_t time_start_of_today(void);
-void vibes_double_pulse(void);
 Window* window_create(void);
 void window_destroy(Window* window);
 Layer* window_get_root_layer(const Window* window);

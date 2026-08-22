@@ -6,6 +6,11 @@ All notable changes to Nostalgic Commander. Format follows
 
 ## [Unreleased]
 
+### Removed
+
+- **Disconnect-vibration setting** — the OS owns phone-disconnect vibration
+  now; the face's select and its buzz path are gone.
+
 ## [1.7.0] - 2026-08-20
 
 ### Added

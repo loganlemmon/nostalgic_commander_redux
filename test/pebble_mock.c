@@ -142,13 +142,13 @@ GRect gbitmap_get_bounds(const GBitmap* bitmap) {
 }
 
 bool mock_speaker_muted = false;
-int mock_speaker_play_notes_count = 0;
-uint32_t mock_speaker_last_num_notes = 0;
+int mock_speaker_play_tracks_count = 0;
+uint32_t mock_speaker_last_num_tracks = 0;
 uint8_t mock_speaker_last_volume = 0;
-bool speaker_play_notes(const SpeakerNote* notes, uint32_t num_notes, uint8_t volume) {
-  (void)notes;
-  mock_speaker_play_notes_count++;
-  mock_speaker_last_num_notes = num_notes;
+bool speaker_play_tracks(const SpeakerTrack* tracks, uint32_t num_tracks, uint8_t volume) {
+  (void)tracks;
+  mock_speaker_play_tracks_count++;
+  mock_speaker_last_num_tracks = num_tracks;
   mock_speaker_last_volume = volume;
   return true;
 }
@@ -610,10 +610,6 @@ time_t time_start_of_today(void) {
   struct tm* lt = localtime(&now);
   return now - (time_t)(lt->tm_hour * 3600 + lt->tm_min * 60 + lt->tm_sec);
 }
-int mock_vibes_count = 0;
-void vibes_double_pulse(void) {
-  mock_vibes_count++;
-}
 
 Window* window_create(void) {
   return NULL;
@@ -670,7 +666,6 @@ void mock_reset(void) {
   mock_health_sum_today_count = 0;
   mock_health_peek_count = 0;
   mock_health_values_reset();
-  mock_vibes_count = 0;
   mock_mark_dirty_count = 0;
   mock_set_text_count = 0;
   mock_set_text_color_count = 0;
@@ -689,8 +684,8 @@ void mock_reset(void) {
   mock_fb_release_count = 0;
   mock_window_set_bg_count = 0;
   mock_speaker_muted = false;
-  mock_speaker_play_notes_count = 0;
-  mock_speaker_last_num_notes = 0;
+  mock_speaker_play_tracks_count = 0;
+  mock_speaker_last_num_tracks = 0;
   mock_speaker_last_volume = 0;
   memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));  // opaque black glass
   mock_health_subscribe_count = 0;

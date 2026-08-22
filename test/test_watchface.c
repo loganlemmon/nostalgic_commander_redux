@@ -44,10 +44,12 @@ static void reset_all_state(void) {
   s_settings_date_format = 0;
   s_settings_short_date_format = 0;
   s_settings_dow_position = 0;
-  s_settings_disconnect_vibe = 1;
   s_settings_weather_window = 12;
   s_settings_crt = 0;
   s_settings_crt_sound = 0;
+  // Regenerable content cache: reset so a first-use test doesn't inherit one.
+  s_strike_pcm_ready = false;
+  memset(s_strike_pcm, 0, sizeof(s_strike_pcm));
 
   s_battery_level = 100;
   s_battery_charging = false;
@@ -2887,37 +2889,6 @@ void test_undisplayed_health_metrics_should_read_as_no_data(void) {
   TEST_ASSERT_EQUAL_INT(-1, s_step_count);
 }
 
-void test_handle_bluetooth_should_vibrate_only_on_disconnect_transition(void) {
-  s_connected = true;
-  handle_bluetooth(false);  // genuine drop: buzz
-  TEST_ASSERT_EQUAL_INT(1, mock_vibes_count);
-  TEST_ASSERT_FALSE(s_connected);
-
-  handle_bluetooth(false);  // still disconnected (relaunch-while-away): silent
-  TEST_ASSERT_EQUAL_INT(1, mock_vibes_count);
-
-  handle_bluetooth(true);  // reconnect: silent
-  TEST_ASSERT_EQUAL_INT(1, mock_vibes_count);
-  TEST_ASSERT_TRUE(s_connected);
-
-  handle_bluetooth(false);  // second genuine drop: buzz again
-  TEST_ASSERT_EQUAL_INT(2, mock_vibes_count);
-}
-
-void test_handle_bluetooth_should_stay_silent_on_drops_when_the_buzz_is_disabled(void) {
-  mock_vibes_count = 0;
-
-  s_settings_disconnect_vibe = 0;  // consent select: silenced
-  s_connected = true;
-  handle_bluetooth(false);  // genuine drop, but silenced
-  TEST_ASSERT_EQUAL_INT(0, mock_vibes_count);
-  TEST_ASSERT_FALSE(s_connected);
-
-  handle_bluetooth(true);
-  handle_bluetooth(false);  // drop again: still silent
-  TEST_ASSERT_EQUAL_INT(0, mock_vibes_count);
-}
-
 void test_inbox_should_parse_weather_payload_and_persist(void) {
   mock_persist_reset();
   mock_dict_reset();
@@ -3214,27 +3185,6 @@ void test_inbox_should_parse_the_newer_settings_and_centre_slot(void) {
   TEST_ASSERT_EQUAL_INT(SHORT_DATE_DAY_MONTH, s_settings_short_date_format);
   TEST_ASSERT_EQUAL_INT(DOW_HIDDEN, s_settings_dow_position);
   TEST_ASSERT_EQUAL_INT(DATA_SOURCE_STEPS_BAR, s_complication_slots[5].source);
-}
-
-void test_inbox_should_parse_and_persist_disconnect_vibe_setting(void) {
-  mock_persist_reset();
-  mock_dict_reset();
-  mock_dict_add_int(MESSAGE_KEY_SETTINGS_DISCONNECT_VIBE, 1);
-  inbox_received_callback(NULL, NULL);
-  TEST_ASSERT_EQUAL_INT(1, s_settings_disconnect_vibe);
-  TEST_ASSERT_EQUAL_INT(1, persist_read_int(PERSIST_KEY_SETTINGS_DISCONNECT_VIBE));
-
-  mock_dict_reset();
-  mock_dict_add_int(MESSAGE_KEY_SETTINGS_DISCONNECT_VIBE, 0);
-  inbox_received_callback(NULL, NULL);
-  TEST_ASSERT_EQUAL_INT(0, s_settings_disconnect_vibe);
-  TEST_ASSERT_EQUAL_INT(0, persist_read_int(PERSIST_KEY_SETTINGS_DISCONNECT_VIBE));
-
-  // load_settings() must restore what the inbox persisted, or the choice
-  // silently reverts on the next launch.
-  s_settings_disconnect_vibe = 1;
-  load_settings();
-  TEST_ASSERT_EQUAL_INT(0, s_settings_disconnect_vibe);
 }
 
 void test_inbox_units_change_should_trigger_weather_refetch(void) {
@@ -3804,18 +3754,28 @@ void test_crt_vignette_should_dither_the_falloff(void) {
 void test_crt_ca_should_pull_red_from_the_left(void) {
   s_settings_crt = 1;
   memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));  // opaque black
-  // A lone red pixel in the CA zone; at (180, 110) the shift is 1: dest(180)
-  // resamples its red channel from (179) — the colour shears one px over the
-  // void, and the now-empty source spot stays resampled black.
-  mock_framebuffer[110 * 200 + 179] = 0xF0;  // opaque red
+  // A red bar at cols 23..30 on row 110 — squarely in the CA zone, left half,
+  // where the fringe reads R from the left side. The helper maps dest cells
+  // 31 and 32 to s=1, so 31 pulls from raw(30), 32 stays void.
+  for (int x = 23; x <= 30; x++) mock_framebuffer[110 * 200 + x] = 0xF0;
   crt_update_proc(NULL, s_fake_ctx);
 
   uint8_t* row = &mock_framebuffer[110 * 200];
-  TEST_ASSERT_TRUE(crt_ca_shift(180, 110, 200, 228) > 0);
-  TEST_ASSERT_EQUAL_HEX8(3, (row[180] >> 4) & 3);  // R pulled in from the left
-  TEST_ASSERT_EQUAL_HEX8(0, (row[180] >> 2) & 3);  // ...while G and B stay black
-  TEST_ASSERT_EQUAL_HEX8(0, row[180] & 3);
-  TEST_ASSERT_EQUAL_HEX8(0xC0, row[179]);  // vacated: dest(179)'s R came from (178)
+  TEST_ASSERT_TRUE(((row[27] >> 4) & 3) >= 2);    // bar interior stays red (dither)
+  TEST_ASSERT_TRUE(((row[31] >> 4) & 3) >= 2);    // pulled in from the bar
+  TEST_ASSERT_EQUAL_HEX8(0, (row[31] >> 2) & 3);  // G/B read from the void
+  TEST_ASSERT_EQUAL_HEX8(0, (row[32] >> 4) & 3);  // next cell stays void
+}
+
+void test_crt_ca_onset_should_jitter_by_bayer_cell(void) {
+  // Below the dead zone nothing shifts, whatever cell; at the corner every
+  // cell shifts the full span.
+  TEST_ASSERT_EQUAL_INT(0, crt_ca_shift_from_q8(CRT_CA_START_Q8, 15));
+  TEST_ASSERT_EQUAL_INT(CRT_CA_MAX_SHIFT, crt_ca_shift_from_q8(256, 8));
+  // Mid-ladder witness pin: with the lift, remap ~59 flips between t=3 and
+  // t=15 cells — that tile edge is the onset granularity.
+  TEST_ASSERT_EQUAL_INT(0, crt_ca_shift_from_q8(35, 3));
+  TEST_ASSERT_EQUAL_INT(1, crt_ca_shift_from_q8(35, 15));
 }
 
 void test_crt_warp_should_pull_the_top_row_inward(void) {
@@ -3825,14 +3785,16 @@ void test_crt_warp_should_pull_the_top_row_inward(void) {
   // their centres survive (CA is white-transparent well inside a stripe).
   s_settings_crt = 1;
   memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));
-  for (int x = 54; x <= 63; x++) mock_framebuffer[20 * 200 + x] = 0xFF;
-  for (int x = 136; x <= 145; x++) mock_framebuffer[20 * 200 + x] = 0xFF;
+  // A green-only bar up to col 63: geometrically pinned by the warp, immune
+  // to CA (G never resamples). Assert the move on G alone.
+  for (int x = 54; x <= 63; x++) mock_framebuffer[20 * 200 + x] = 0x0C;
+  for (int x = 136; x <= 145; x++) mock_framebuffer[20 * 200 + x] = 0x0C;
   crt_update_proc(NULL, s_fake_ctx);
 
   TEST_ASSERT_TRUE(crt_warp_inset(20, 228) >= 3);
-  TEST_ASSERT_EQUAL_HEX8(0xFF, mock_framebuffer[20 * 200 + 56]);  // stripe centre
-  TEST_ASSERT_TRUE(mock_framebuffer[20 * 200 + 54] != 0xFF);      // left edge pulled in
-  TEST_ASSERT_TRUE(mock_framebuffer[20 * 200 + 145] != 0xFF);     // right edge, mirroring
+  TEST_ASSERT_EQUAL_HEX8(3, (mock_framebuffer[20 * 200 + 56] >> 2) & 3);  // stripe centre
+  TEST_ASSERT_TRUE(((mock_framebuffer[20 * 200 + 54] >> 2) & 3) < 3);     // left edge pulled in
+  TEST_ASSERT_TRUE(((mock_framebuffer[20 * 200 + 145] >> 2) & 3) < 3);    // right edge, mirroring
 }
 
 void test_crt_pure_geometry_should_match_the_spec(void) {
@@ -3913,31 +3875,57 @@ void test_crt_sound_should_play_only_when_enabled_and_unmuted(void) {
   s_settings_crt = 1;
 
   crt_backlight_handler(true);  // sound toggle off: nothing
-  TEST_ASSERT_EQUAL_INT(0, mock_speaker_play_notes_count);
+  TEST_ASSERT_EQUAL_INT(0, mock_speaker_play_tracks_count);
 
   s_settings_crt_sound = 1;
   mock_speaker_muted = true;  // system mute / Quiet Time wins
   crt_backlight_handler(true);
-  TEST_ASSERT_EQUAL_INT(0, mock_speaker_play_notes_count);
+  TEST_ASSERT_EQUAL_INT(0, mock_speaker_play_tracks_count);
 
   mock_speaker_muted = false;
   crt_backlight_handler(true);
-  TEST_ASSERT_EQUAL_INT(1, mock_speaker_play_notes_count);
-  TEST_ASSERT_EQUAL_UINT(sizeof(s_strike_notes) / sizeof(SpeakerNote), mock_speaker_last_num_notes);
-  TEST_ASSERT_EQUAL_UINT8(70, mock_speaker_last_volume);
+  TEST_ASSERT_EQUAL_INT(1, mock_speaker_play_tracks_count);
+  TEST_ASSERT_EQUAL_UINT32(1, mock_speaker_last_num_tracks);
+  TEST_ASSERT_EQUAL_UINT8(85, mock_speaker_last_volume);
 }
 
-void test_crt_strike_notes_should_form_a_falling_woomp(void) {
-  // The woomp runs inside the strike's decay window: 250-400ms after the
-  // opener. Its hum notes fall in pitch and only lose amplitude.
-  unsigned total = 0;
-  int n = sizeof(s_strike_notes) / sizeof(SpeakerNote);
-  for (int i = 0; i < n; i++) total += s_strike_notes[i].duration_ms;
-  TEST_ASSERT_TRUE(total >= 250 && total <= 400);
-  for (int i = 2; i < n; i++) {
-    TEST_ASSERT_TRUE(s_strike_notes[i].midi_note < s_strike_notes[i - 1].midi_note);
-    TEST_ASSERT_TRUE(s_strike_notes[i].velocity <= s_strike_notes[i - 1].velocity);
+void test_crt_strike_pcm_should_swell_fall_and_never_click(void) {
+  // The note-table woomp cracked at every note boundary; the synthesized PCM
+  // hum gets its envelope/shape pinned instead.
+  static int16_t buf[CRT_STRIKE_PCM_SAMPLES];
+  crt_strike_synth(buf, CRT_STRIKE_PCM_SAMPLES);
+
+  // Swell in: the buffer starts at silence, and ends in a run of zeros (the
+  // end-crack guard).
+  TEST_ASSERT_INT_WITHIN(3000, 0, buf[0]);
+  for (int i = CRT_STRIKE_PCM_SAMPLES - 64; i < CRT_STRIKE_PCM_SAMPLES; i++) {
+    TEST_ASSERT_EQUAL_INT16(0, buf[i]);
   }
+
+  // ...peaks after the rise, and the tail is well below the peak.
+  int peak[5] = {0};
+  for (int seg = 0; seg < 5; seg++) {
+    for (size_t i = (size_t)(seg) * (CRT_STRIKE_PCM_SAMPLES / 5);
+         i < (size_t)(seg + 1) * (CRT_STRIKE_PCM_SAMPLES / 5); i++) {
+      if (abs(buf[i]) > peak[seg]) peak[seg] = abs(buf[i]);
+    }
+  }
+  TEST_ASSERT_TRUE(peak[0] < peak[1]);  // swell
+  TEST_ASSERT_TRUE(peak[3] < peak[2]);  // decay
+  TEST_ASSERT_TRUE(peak[4] < peak[3]);  // decaying the whole tail
+
+  // Click-free: the harmonic-blended low glide peaks a sample step ~1160;
+  // a note-boundary step would clear it by 10x.
+  int max_step = 0;
+  for (size_t i = 1; i < CRT_STRIKE_PCM_SAMPLES; i++) {
+    int step = abs(buf[i] - buf[i - 1]);
+    if (step > max_step) max_step = step;
+  }
+  TEST_ASSERT_TRUE(max_step < 1500);
+}
+
+void test_crt_strike_pcm_should_fit_the_speaker_budget(void) {
+  TEST_ASSERT_TRUE(CRT_STRIKE_PCM_SAMPLES * 2 <= 16 * 1024);
 }
 
 void test_crt_flash_should_need_backlight_on_and_the_toggle(void) {
@@ -4121,8 +4109,6 @@ int main(void) {
   RUN_TEST(test_health_handler_should_not_throttle_heart_rate_updates);
   RUN_TEST(test_health_handler_should_not_throttle_significant_updates);
   RUN_TEST(test_undisplayed_health_metrics_should_read_as_no_data);
-  RUN_TEST(test_handle_bluetooth_should_vibrate_only_on_disconnect_transition);
-  RUN_TEST(test_handle_bluetooth_should_stay_silent_on_drops_when_the_buzz_is_disabled);
   RUN_TEST(test_inbox_should_parse_weather_payload_and_persist);
   RUN_TEST(test_inbox_should_parse_narrow_width_weather_ints);
   RUN_TEST(test_inbox_should_parse_and_persist_tomorrow_low);
@@ -4135,7 +4121,6 @@ int main(void) {
   RUN_TEST(test_inbox_settings_only_message_should_not_stamp_weather_cache);
   RUN_TEST(test_inbox_should_parse_slot_assignments);
   RUN_TEST(test_inbox_should_parse_the_newer_settings_and_centre_slot);
-  RUN_TEST(test_inbox_should_parse_and_persist_disconnect_vibe_setting);
   RUN_TEST(test_inbox_units_change_should_trigger_weather_refetch);
   RUN_TEST(test_inbox_weather_window_change_should_trigger_weather_refetch);
   RUN_TEST(test_refresh_state_should_never_request_weather);
@@ -4171,12 +4156,14 @@ int main(void) {
   RUN_TEST(test_crt_should_round_the_corners_and_keep_the_centre);
   RUN_TEST(test_crt_vignette_should_dither_the_falloff);
   RUN_TEST(test_crt_ca_should_pull_red_from_the_left);
+  RUN_TEST(test_crt_ca_onset_should_jitter_by_bayer_cell);
   RUN_TEST(test_crt_warp_should_pull_the_top_row_inward);
   RUN_TEST(test_crt_pure_geometry_should_match_the_spec);
   RUN_TEST(test_crt_strike_should_jitter_rows_and_decay);
   RUN_TEST(test_crt_strike_should_slide_rows_and_boost_ca);
   RUN_TEST(test_crt_sound_should_play_only_when_enabled_and_unmuted);
-  RUN_TEST(test_crt_strike_notes_should_form_a_falling_woomp);
+  RUN_TEST(test_crt_strike_pcm_should_swell_fall_and_never_click);
+  RUN_TEST(test_crt_strike_pcm_should_fit_the_speaker_budget);
   RUN_TEST(test_crt_flash_should_need_backlight_on_and_the_toggle);
   RUN_TEST(test_crt_setting_push_should_redraw_the_overlay);
   RUN_TEST(test_crt_toggle_off_should_force_a_full_repaint);

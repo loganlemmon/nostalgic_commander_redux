@@ -98,8 +98,6 @@ static const MessageField s_settings_fields[] = {
     {&MESSAGE_KEY_SETTINGS_SHORT_DATE_FORMAT, PERSIST_KEY_SETTINGS_SHORT_DATE,
      &s_settings_short_date_format, 0},
     {&MESSAGE_KEY_SETTINGS_DOW_POSITION, PERSIST_KEY_SETTINGS_DOW, &s_settings_dow_position, 0},
-    {&MESSAGE_KEY_SETTINGS_DISCONNECT_VIBE, PERSIST_KEY_SETTINGS_DISCONNECT_VIBE,
-     &s_settings_disconnect_vibe, 0},
     {&MESSAGE_KEY_SETTINGS_WEATHER_WINDOW, PERSIST_KEY_SETTINGS_WEATHER_WINDOW,
      &s_settings_weather_window, 0},
     {&MESSAGE_KEY_SETTINGS_CRT, PERSIST_KEY_SETTINGS_CRT, &s_settings_crt, 0},
