@@ -22,13 +22,17 @@ extern Layer* s_crt_layer;
 #define CRT_VIGNETTE_PX 20
 #define CRT_CORNER_RADIUS 14
 #define CRT_WARP_MAX_PX 5
-#define CRT_CA_MAX_SHIFT 3
-// CA is silent inside this radius (Q8 of the squared normalized distance;
-// 8 keeps the fringes off the centred text, on at the slot-frame scale).
-#define CRT_CA_START_Q8 8
-// Flat additive lift after the onset remap — pushes shift 1 into the
-// mid-column rows without changing the corner max.
-#define CRT_CA_LIFT_Q8 32
+// CA zones by elliptical radius (Q8 of r²-summated terms; mid-edges ≈ 256,
+// corner ≈ 362). r < R2: clean; R2..R3: 1px; beyond R3: 2px channel split.
+// Vertical uses one threshold (R2V) with a 1px cap.
+#define CRT_CA_R2_Q8 170
+#define CRT_CA_R3_Q8 280
+#define CRT_CA_R2V_Q8 170
+
+// Squared thresholds for the zone compare — no per-pixel sqrt needed.
+#define CRT_CA_R2_X2Q8 (CRT_CA_R2_Q8 * CRT_CA_R2_Q8 + 255 >> 8)
+#define CRT_CA_R3_X2Q8 (CRT_CA_R3_Q8 * CRT_CA_R3_Q8 + 255 >> 8)
+#define CRT_CA_R2V_X2Q8 (CRT_CA_R2V_Q8 * CRT_CA_R2V_Q8 + 255 >> 8)
 
 // The wake-up: a degauss strike. On backlight-on, FRAMES 50ms ticks of
 // per-row horizontal jitter with decaying amplitude plus amplified channel

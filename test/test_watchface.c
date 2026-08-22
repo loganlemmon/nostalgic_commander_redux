@@ -3754,28 +3754,25 @@ void test_crt_vignette_should_dither_the_falloff(void) {
 void test_crt_ca_should_pull_red_from_the_left(void) {
   s_settings_crt = 1;
   memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));  // opaque black
-  // A red bar at cols 23..30 on row 110 — squarely in the CA zone, left half,
-  // where the fringe reads R from the left side. The helper maps dest cells
-  // 31 and 32 to s=1, so 31 pulls from raw(30), 32 stays void.
+  // A red bar at cols 23..30 on row 110, left half. dest(22,109) samples
+  // (23, 110) — the fringe lands one row UP, one col past the bar's edge.
   for (int x = 23; x <= 30; x++) mock_framebuffer[110 * 200 + x] = 0xF0;
   crt_update_proc(NULL, s_fake_ctx);
 
-  uint8_t* row = &mock_framebuffer[110 * 200];
-  TEST_ASSERT_TRUE(((row[27] >> 4) & 3) >= 2);    // bar interior stays red (dither)
-  TEST_ASSERT_TRUE(((row[31] >> 4) & 3) >= 2);    // pulled in from the bar
-  TEST_ASSERT_EQUAL_HEX8(0, (row[31] >> 2) & 3);  // G/B read from the void
-  TEST_ASSERT_EQUAL_HEX8(0, (row[32] >> 4) & 3);  // next cell stays void
+  uint8_t* row = &mock_framebuffer[109 * 200];
+  TEST_ASSERT_TRUE(((row[22] >> 4) & 3) >= 2);    // pulled in from below-right
+  TEST_ASSERT_EQUAL_HEX8(0, (row[22] >> 2) & 3);  // G read from own (empty) row
+  TEST_ASSERT_EQUAL_HEX8(0, (row[21] >> 4) & 3);  // outside the bar: void
 }
 
-void test_crt_ca_onset_should_jitter_by_bayer_cell(void) {
-  // Below the dead zone nothing shifts, whatever cell; at the corner every
-  // cell shifts the full span.
-  TEST_ASSERT_EQUAL_INT(0, crt_ca_shift_from_q8(CRT_CA_START_Q8, 15));
-  TEST_ASSERT_EQUAL_INT(CRT_CA_MAX_SHIFT, crt_ca_shift_from_q8(256, 8));
-  // Mid-ladder witness pin: with the lift, remap ~59 flips between t=3 and
-  // t=15 cells — that tile edge is the onset granularity.
-  TEST_ASSERT_EQUAL_INT(0, crt_ca_shift_from_q8(35, 3));
-  TEST_ASSERT_EQUAL_INT(1, crt_ca_shift_from_q8(35, 15));
+void test_crt_ca_onset_should_cut_at_the_dead_zone(void) {
+  // Centre never fringes; the corners fringe the full 2px.
+  TEST_ASSERT_EQUAL_INT(0, crt_ca_shift(100, 113, 200, 228));
+  TEST_ASSERT_EQUAL_INT(2, crt_ca_shift(0, 0, 200, 228));
+  TEST_ASSERT_EQUAL_INT(2, crt_ca_shift(199, 227, 200, 228));
+  // Mid-edge cells land in the middle band, monotone from the centre out.
+  TEST_ASSERT_EQUAL_INT(1, crt_ca_shift(0, 113, 200, 228));
+  TEST_ASSERT_TRUE(crt_ca_shift(190, 113, 200, 228) >= crt_ca_shift(160, 113, 200, 228));
 }
 
 void test_crt_warp_should_pull_the_top_row_inward(void) {
@@ -3803,10 +3800,10 @@ void test_crt_pure_geometry_should_match_the_spec(void) {
   TEST_ASSERT_EQUAL_INT(CRT_WARP_MAX_PX, crt_warp_inset(227, 228));
   TEST_ASSERT_EQUAL_INT(0, crt_warp_inset(113, 228));
 
-  // CA: zero at the centre, full shift at the corners, monotone along x.
+  // CA: zero at the centre, 2px at the corners, monotone along x.
   TEST_ASSERT_EQUAL_INT(0, crt_ca_shift(100, 113, 200, 228));
-  TEST_ASSERT_EQUAL_INT(CRT_CA_MAX_SHIFT, crt_ca_shift(0, 0, 200, 228));
-  TEST_ASSERT_EQUAL_INT(CRT_CA_MAX_SHIFT, crt_ca_shift(199, 227, 200, 228));
+  TEST_ASSERT_EQUAL_INT(2, crt_ca_shift(0, 0, 200, 228));
+  TEST_ASSERT_EQUAL_INT(2, crt_ca_shift(199, 227, 200, 228));
   TEST_ASSERT_TRUE(crt_ca_shift(190, 113, 200, 228) >= crt_ca_shift(160, 113, 200, 228));
 
   // Vignette: black boundary, full brightness outside the depth, rising
@@ -3847,22 +3844,23 @@ void test_crt_strike_should_slide_rows_and_boost_ca(void) {
   s_settings_crt = 1;
   s_flash_phase = 0;  // amp 6, CA boost 3
   memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));
-  // A white bar through the strike zone: cols 50..90 on row 60. Both the
-  // warp (1px) and vignette (well above 16) leave it alone; only the strike
-  // moves it, plus CA-from-boosted neighbours bleeding at the edges.
-  int y = 60;
-  for (int x = 50; x <= 90; x++) mock_framebuffer[y * 200 + x] = 0xFF;
+  // A white bar three rows tall through the strike zone: cols 50..90 at
+  // rows 59..61 — thick enough that vertical CA from row 60 reads bar rows
+  // on either side.
+  for (int y = 59; y <= 61; y++) {
+    for (int x = 50; x <= 90; x++) mock_framebuffer[y * 200 + x] = 0xFF;
+  }
   crt_update_proc(NULL, s_fake_ctx);
 
   // Bar interior survives every offset; far flank stays void.
-  TEST_ASSERT_EQUAL_HEX8(0xFF, mock_framebuffer[y * 200 + 70]);
-  TEST_ASSERT_EQUAL_HEX8(0xC0, mock_framebuffer[y * 200 + 30]);
+  TEST_ASSERT_EQUAL_HEX8(0xFF, mock_framebuffer[60 * 200 + 70]);
+  TEST_ASSERT_EQUAL_HEX8(0xC0, mock_framebuffer[60 * 200 + 30]);
 
   // The bar's centroid follows crt_strike_offset's row shift.
-  int off = crt_strike_offset(y, 0);
+  int off = crt_strike_offset(60, 0);
   int first = -1, last = -1;
   for (int x = 30; x < 120; x++) {
-    if (mock_framebuffer[y * 200 + x] != 0xC0) {
+    if (mock_framebuffer[60 * 200 + x] != 0xC0) {
       if (first < 0) first = x;
       last = x;
     }
@@ -4156,7 +4154,7 @@ int main(void) {
   RUN_TEST(test_crt_should_round_the_corners_and_keep_the_centre);
   RUN_TEST(test_crt_vignette_should_dither_the_falloff);
   RUN_TEST(test_crt_ca_should_pull_red_from_the_left);
-  RUN_TEST(test_crt_ca_onset_should_jitter_by_bayer_cell);
+  RUN_TEST(test_crt_ca_onset_should_cut_at_the_dead_zone);
   RUN_TEST(test_crt_warp_should_pull_the_top_row_inward);
   RUN_TEST(test_crt_pure_geometry_should_match_the_spec);
   RUN_TEST(test_crt_strike_should_jitter_rows_and_decay);

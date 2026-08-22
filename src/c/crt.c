@@ -30,31 +30,29 @@ int crt_warp_inset(int y, int h) {
   return (CRT_WARP_MAX_PX * dy * dy) / ((h - 1) * (h - 1));
 }
 
-// Declared before use in apply below.
-static int crt_ca_shift_from_q8(int q8, int t);
+// Vertical CA runs slimmer: 1px max, engages closer to the edges.
+static int crt_ca_shift_v(int rq) {
+  return rq < CRT_CA_R2_V_Q8 ? 0 : 1;
+}
+
+// Horizontal CA rung from the squared Q8 radius (units: xq + yq from
+// crt_ca_shift). Zone boundaries squared once:
+//   rq ≥ R ⇔ xq+yq ≥ ceil(R²/256) — so no per-pixel sqrt is needed.
+static int crt_ca_shift_h2(int xy_sum) {
+  return xy_sum < CRT_CA_R2_X2Q8 ? 0 : (xy_sum < CRT_CA_R3_X2Q8 ? 1 : 2);
+}
+// Vertical wider zones, 1px max, same formulation.
+static int crt_ca_shift_v2(int xy_sum) {
+  return xy_sum < CRT_CA_R2V_X2Q8 ? 0 : 1;
+}
 
 int crt_ca_shift(int x, int y, int w, int h) {
   int dx = 2 * x - (w - 1);
   int dy = 2 * y - (h - 1);
-  // Squared distance to the nearest edge, Q8 (256 = an edge), per-axis
-  // normalised — the stronger axis wins, so mid-edge and corner cells fringe
-  // equally.
+  // Elliptical radius from the centre, Q8: corner ≈ 362, mid-edge = 256.
   int xq = (dx * dx * 256) / ((w - 1) * (w - 1));
   int yq = (dy * dy * 256) / ((h - 1) * (h - 1));
-  return crt_ca_shift_from_q8(xq > yq ? xq : yq, 8);
-}
-
-// The q8 -> px mapping: remap the radius after the dead zone across the full
-// shift range, then jitter the rounding line by the pixel's Bayer cell. Right
-// at a step boundary adjacent cells round differently, so the CA dawns over a
-// granular 4x4 dot pattern rather than a contour line on the glass.
-static int crt_ca_shift_from_q8(int q8, int t) {
-  if (q8 <= CRT_CA_START_Q8) return 0;
-  int remap = (q8 - CRT_CA_START_Q8) * 256 / (256 - CRT_CA_START_Q8) + CRT_CA_LIFT_Q8;
-  int f16 = remap * CRT_CA_MAX_SHIFT;
-  int shift = (f16 + (t - 8) * 16) >> 8;  // Bayer nudge moves the rounding line
-  if (shift < 0) shift = 0;
-  return shift > CRT_CA_MAX_SHIFT ? CRT_CA_MAX_SHIFT : shift;
+  return crt_ca_shift_h2(xq + yq);
 }
 
 // Distance toward the nearest frame edge, counting around the corner arcs:
@@ -108,19 +106,22 @@ static int dither_channel(int c, int f_q8, int t) {
   return v > 3 ? 3 : v;
 }
 
+// Vertical CA samples neighbour rows; the row the pass writes into must stay
+// raw for the reader. Ring of the last three raw rows, populated in the row's
+// own turn, read for ±s_v offsets below/above.
+static uint8_t s_vraw_ring[3][200];
+
 void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
   static uint8_t row_ca[200];
-  // CA's x² column term: filled once for the actual width (constant on emery,
-  // but the field keeps the host tests honest).
-  static uint16_t s_ca_xterm[200];
-  static int s_ca_xterm_w = 0;
+  static uint16_t s_ca_xq[200];
+  static int s_ca_xq_w = 0;
   if (w > (int)sizeof(row_ca)) return;
-  if (s_ca_xterm_w != w) {
+  if (s_ca_xq_w != w) {
     for (int x = 0; x < w; x++) {
       int dx = 2 * x - (w - 1);
-      s_ca_xterm[x] = (uint16_t)((dx * dx * 256) / ((w - 1) * (w - 1)));
+      s_ca_xq[x] = (uint16_t)((dx * dx * 256) / ((w - 1) * (w - 1)));
     }
-    s_ca_xterm_w = w;
+    s_ca_xq_w = w;
   }
   // CA boost during the strike: the separation balloons while the mask
   // degausses. Phase-indexed through the same decay table as the row jitter.
@@ -129,75 +130,101 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
                      : 0;
   const int h1sq = (h - 1) * (h - 1);
 
-  for (int y = 0; y < h; y++) {
-    uint8_t* row = fb + (size_t)y * w;
-    int dy = 2 * y - (h - 1);
-    int yterm = dy * dy * 256 / h1sq;
-    int row_off = crt_strike_offset(y, flash_phase);
+  // Per-row body, applied in two half-passes. Both passes read away from
+  // the screen centreline: from captured (raw) ring rows only, which is the
+  // pass-order invariant that lets dest rows be rewritten in place.
+  for (int pass = 0; pass < 2; pass++) {
+    // pass 0: 0..(h-1)/2 forward; pass 1: h-1..(h-1)/2+1 backward.
+    for (int yi = (pass == 0 ? 0 : h - 1); pass == 0 ? yi <= (h - 1) / 2 : yi > (h - 1) / 2;
+         yi += pass == 0 ? 1 : -1) {
+      int y = yi;
+      uint8_t* row = fb + (size_t)y * w;
+      int dy = 2 * y - (h - 1);
+      int yterm = dy * dy * 256 / h1sq;
+      int row_off = crt_strike_offset(y, flash_phase);
 
-    // 1) CA on the RAW row: the fringe samples clean pixels, so a uniform
-    //    background stays uniform — neither side borrows vignette darkness.
-    //    Jitter cell shares the vignette's mirrored Bayer grid.
-    for (int x = 0; x < w; x++) {
-      int q8 = s_ca_xterm[x] > yterm ? s_ca_xterm[x] : yterm;
-      int ex = x < w - 1 - x ? x : w - 1 - x;
-      int t = s_bayer4[((y < h - 1 - y ? y : h - 1 - y) & 3) * 4 + (ex & 3)];
-      int s = crt_ca_shift_from_q8(q8, t) + ca_boost;
-      if (s <= 0) {
-        row_ca[x] = row[x];
-      } else {
-        // Fringe direction mirrors across the vertical centreline, as it does
-        // on a real tube's shadow-mask misregistration.
+      // Capture this row while it is still raw, and (if not done on this row)
+      // one step ahead in traversal direction — the CA stage reads ±1 rows on
+      // both halves and the ring can only hold what traversal has seen.
+      memcpy(s_vraw_ring[y % 3], row, w);
+      int y_next = pass == 0 ? y + 1 : y - 1;
+      if (y_next >= 0 && y_next < h) memcpy(s_vraw_ring[y_next % 3], fb + (size_t)y_next * w, w);
+
+      // 1) CA from raw sources: horizontal fringe samples the row, vertical
+      //    fringe samples ring rows toward/away from the centreline.
+      for (int x = 0; x < w; x++) {
+        int dx = 2 * x - (w - 1);
+        int xq = (dx * dx * 256) / ((w - 1) * (w - 1));
+        int s_h = crt_ca_shift_h2(xq + yterm) + ca_boost;
+        int s_v = crt_ca_shift_v2(xq + yterm);
+
         bool left = x * 2 < w - 1;
-        int r_from = left ? x - s : x + s;
-        int b_from = left ? x + s : x - s;
-        if (r_from < 0) r_from = 0;
-        if (r_from >= w) r_from = w - 1;
-        if (b_from < 0) b_from = 0;
-        if (b_from >= w) b_from = w - 1;
-        row_ca[x] = GCOLOR8_ALPHA | (row[r_from] & 0x30) | (row[x] & 0x0C) | (row[b_from] & 0x03);
-      }
-    }
+        bool top = y * 2 < h - 1;
+        // Sampling signs: left half pulls R from the right; top half pulls R
+        // from below. Mirrors across both centrelines. Forward reads (below on
+        // the top half, above on the bottom half) rely on the ring capture
+        // being one row ahead in traversal direction.
+        int rx = left ? x + s_h : x - s_h;
+        int bx = left ? x - s_h : x + s_h;
+        int ry = top ? y + s_v : y - s_v;
+        int by = top ? y - s_v : y + s_v;
+        if (rx < 0) rx = 0;
+        if (rx >= w) rx = w - 1;
+        if (bx < 0) bx = 0;
+        if (bx >= w) bx = w - 1;
+        // The ring holds rows y-2..y+2 at most; s_v stays within 1 today.
+        // Both halves only read rows already captured into the ring.
+        // The ring holds rows y-2..y+2 at most; s_v stays within 1 today.
+        // Both halves only read rows already captured into the ring.
+        if (ry < 0) ry = 0;
+        if (ry >= h) ry = h - 1;
+        if (by < 0) by = 0;
+        if (by >= h) by = h - 1;
 
-    // 2) Vignette + dither on the CA'd row — dimming in content space, so
-    //    the curvature pass below bends the already-darkened rim with the
-    //    image. Mirror-symmetric Bayer thresholds keep both rims identical.
-    int inset = crt_warp_inset(y, h);
-    int mul16 = (w << 16) / (w - 2 * inset);  // Q16 jacobian; ==65536 mid-rows
-    int ey = y < h - 1 - y ? y : h - 1 - y;
-    int ty = ey & 3;
-    bool corner_row = ey < CRT_CORNER_RADIUS;
-    for (int x = 0; x < w; x++) {
-      int ex = x < w - 1 - x ? x : w - 1 - x;
-      int d;
-      if (corner_row && ex < CRT_CORNER_RADIUS) {
-        int rx = CRT_CORNER_RADIUS - ex;
-        int ry = CRT_CORNER_RADIUS - ey;
-        d = CRT_CORNER_RADIUS - isqrt_floor(rx * rx + ry * ry);
-        if (d < 0) d = 0;
-      } else {
-        d = ex < ey ? ex : ey;
+        row_ca[x] = GCOLOR8_ALPHA | (s_vraw_ring[ry % 3][rx] & 0x30) | (row[x] & 0x0C) |
+                    (s_vraw_ring[by % 3][bx] & 0x03);
       }
-      int f = crt_vignette_q8_from_depth(d);
-      uint8_t p = row_ca[x];
-      int t = s_bayer4[ty * 4 + (ex & 3)];
-      int r = dither_channel((p >> 4) & 3, f, t);
-      int g = dither_channel((p >> 2) & 3, f, t);
-      int b = dither_channel(p & 3, f, t);
-      row_ca[x] = GCOLOR8_ALPHA | (uint8_t)((r << 4) | (g << 2) | b);
-    }
 
-    // 3) Curvature (+ strike jitter): source column
-    //    sx = cx + (x - cx) * (w / (w - 2*inset)), cx=(w-1)/2, then the strike
-    //    slides the whole row sideways. Rounded to nearest on BOTH signs — a
-    //    >> on negative deltas floors away from zero and clipped the left rim
-    //    a quantum earlier than the right (visible on hardware as a left-edge
-    //    shift under each header).
-    for (int x = 0; x < w; x++) {
-      int dx = 2 * x - (w - 1);
-      int sn = (w - 1) * 65536 + dx * mul16 + 65536;  // sx*131072 + half
-      int sx = (sn >> 17) + row_off;
-      row[x] = (sx < 0 || sx >= w) ? GCOLOR8_OPAQUE_BLACK : row_ca[sx];
+      // 2) Vignette + dither on the CA'd row — dimming in content space, so
+      //    the curvature pass below bends the already-darkened rim with the
+      //    image. Mirror-symmetric Bayer thresholds keep both rims identical.
+      int inset = crt_warp_inset(y, h);
+      int mul16 = (w << 16) / (w - 2 * inset);  // Q16 jacobian; ==65536 mid-rows
+      int ey = y < h - 1 - y ? y : h - 1 - y;
+      int ty = ey & 3;
+      bool corner_row = ey < CRT_CORNER_RADIUS;
+      for (int x = 0; x < w; x++) {
+        int ex = x < w - 1 - x ? x : w - 1 - x;
+        int d;
+        if (corner_row && ex < CRT_CORNER_RADIUS) {
+          int rx = CRT_CORNER_RADIUS - ex;
+          int ry = CRT_CORNER_RADIUS - ey;
+          d = CRT_CORNER_RADIUS - isqrt_floor(rx * rx + ry * ry);
+          if (d < 0) d = 0;
+        } else {
+          d = ex < ey ? ex : ey;
+        }
+        int f = crt_vignette_q8_from_depth(d);
+        uint8_t p = row_ca[x];
+        int t = s_bayer4[ty * 4 + (ex & 3)];
+        int r = dither_channel((p >> 4) & 3, f, t);
+        int g = dither_channel((p >> 2) & 3, f, t);
+        int b = dither_channel(p & 3, f, t);
+        row_ca[x] = GCOLOR8_ALPHA | (uint8_t)((r << 4) | (g << 2) | b);
+      }
+
+      // 3) Curvature (+ strike jitter): source column
+      //    sx = cx + (x - cx) * (w / (w - 2*inset)), cx=(w-1)/2, then the strike
+      //    slides the whole row sideways. Rounded to nearest on BOTH signs — a
+      //    >> on negative deltas floors away from zero and clipped the left rim
+      //    a quantum earlier than the right (visible on hardware as a left-edge
+      //    shift under each header).
+      for (int x = 0; x < w; x++) {
+        int dx = 2 * x - (w - 1);
+        int sn = (w - 1) * 65536 + dx * mul16 + 65536;  // sx*131072 + half
+        int sx = (sn >> 17) + row_off;
+        row[x] = (sx < 0 || sx >= w) ? GCOLOR8_OPAQUE_BLACK : row_ca[sx];
+      }
     }
   }
 }
