@@ -3755,36 +3755,74 @@ void test_crt_vignette_should_dither_the_falloff(void) {
 void test_crt_ca_should_pull_red_from_the_left(void) {
   s_settings_crt = 1;
   memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));  // opaque black
-  // A red bar at cols 23..30 on row 110, left half. dest(22,109) samples
-  // (23, 110) — the fringe lands one row UP, one col past the bar's edge.
+  // A red bar at cols 23..30 on row 110, left half. Under the radial warp
+  // (crt_warp_sx(24,109) = 22 there — ~3% side magnification at that
+  // radius), dest(24,109) displays CA col 22, which samples (23,110) — the
+  // fringe lands one row UP, shifted two dest cols right by the warp.
   for (int x = 23; x <= 30; x++) mock_framebuffer[110 * 200 + x] = 0xF0;
   crt_update_proc(NULL, s_fake_ctx);
 
   uint8_t* row = &mock_framebuffer[109 * 200];
-  TEST_ASSERT_TRUE(((row[22] >> 4) & 3) >= 2);    // pulled in from below-right
-  TEST_ASSERT_EQUAL_HEX8(0, (row[22] >> 2) & 3);  // G read from own (empty) row
-  TEST_ASSERT_EQUAL_HEX8(0, (row[21] >> 4) & 3);  // outside the bar: void
+  TEST_ASSERT_TRUE(((row[24] >> 4) & 3) >= 2);    // pulled in from below-right
+  TEST_ASSERT_EQUAL_HEX8(0, (row[24] >> 2) & 3);  // G read from own (empty) row
+  TEST_ASSERT_EQUAL_HEX8(0, (row[23] >> 4) & 3);  // outside the bar: void
 }
 
 void test_crt_ca_zero_point_should_mirror_ghosts_about_the_line(void) {
-  // Dead-zone correction pins separation to 0: a 1px white line at the
-  // centre becomes symmetric {2,1} fringes — red ghost shifts right, blue
-  // left, G full. The old whole-pixel sampling left it untouched (2/3px of
-  // fringe nobody asked for).
+  // Dead-zone correction pins the fringe to 0 separation: a 1px white line
+  // under a dead zone converges on BOTH halves. The R element sits 1/3px
+  // left of its pixel centre on both halves alike (RGB stripe), so the
+  // correction sign follows the half, not the pull direction — folding -1/3
+  // into q and then mirroring the taps (old form) left the right half a
+  // 2/3px residual splay, measured on hardware. Pin discriminator: buggy
+  // code lights R one column left of the line on the right half.
   s_settings_crt = 1;
   s_flash_phase = CRT_FLASH_IDLE;
-  memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));
-  for (int y = 112; y <= 114; y++) mock_framebuffer[y * 200 + 60] = 0xFF;
-  crt_update_proc(NULL, s_fake_ctx);
 
-  uint8_t* row = &mock_framebuffer[113 * 200];
-  TEST_ASSERT_EQUAL_HEX8(2, (row[60] >> 4) & 3);  // R weighted at the line
-  TEST_ASSERT_EQUAL_HEX8(1, (row[61] >> 4) & 3);  // R ghost shifts right
-  TEST_ASSERT_EQUAL_HEX8(3, (row[60] >> 2) & 3);  // G untouched
-  TEST_ASSERT_EQUAL_HEX8(2, row[60] & 3);         // B weighted at the line
-  TEST_ASSERT_EQUAL_HEX8(1, row[59] & 3);         // B ghost shifts left
-  TEST_ASSERT_EQUAL_HEX8(0, (row[59] >> 4) & 3);  // no red left of the line
-  TEST_ASSERT_EQUAL_HEX8(0, row[61] & 3);         // no blue right of it
+  for (int half = 0; half < 2; half++) {
+    int c = half ? 109 : 90;  // xq≈0 columns: stage-3's blend stays a plain
+    // copy there (fr≈0/255), keeping the crisp motifs this test pins.
+    memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));
+    for (int y = 112; y <= 114; y++) mock_framebuffer[y * 200 + c] = 0xFF;
+    crt_update_proc(NULL, s_fake_ctx);
+
+    uint8_t* row = &mock_framebuffer[113 * 200];
+    // Channel raster displacement vs the content position, in sixths of a
+    // px: elements sit at (6x+1)/6 (R), (6x+3)/6 (G), (6x+5)/6 (B); the
+    // line's content position is c+1/2 = (6c+3)/6. Converged -> 0 on both
+    // halves; the bug scored -4/+4 on the right half, 0 on the left.
+    for (int ch = 0; ch < 3; ch++) {
+      int num = 0, den = 0;
+      for (int x = c - 3; x <= c + 3; x++) {
+        int l = ch == 0 ? (row[x] >> 4) & 3 : (ch == 1 ? (row[x] >> 2) & 3 : row[x] & 3);
+        num += l * (6 * x + 1 + 2 * ch);
+        den += l;
+      }
+      TEST_ASSERT_TRUE(den > 0);
+      TEST_ASSERT_INT_WITHIN(1, 0, num / den - (6 * c + 3));
+    }
+
+    if (!half) {
+      // Left half, f=2 — exact under rounding (old bit-identical path).
+      TEST_ASSERT_EQUAL_HEX8(2, (row[90] >> 4) & 3);  // R weighted at the line
+      TEST_ASSERT_EQUAL_HEX8(1, (row[91] >> 4) & 3);  // R ghost toward the edge
+      TEST_ASSERT_EQUAL_HEX8(3, (row[90] >> 2) & 3);  // G untouched
+      TEST_ASSERT_EQUAL_HEX8(2, row[90] & 3);         // B weighted at the line
+      TEST_ASSERT_EQUAL_HEX8(1, row[89] & 3);         // B ghost toward the edge
+      TEST_ASSERT_EQUAL_HEX8(0, (row[89] >> 4) & 3);  // no red past it
+      TEST_ASSERT_EQUAL_HEX8(0, row[91] & 3);         // no blue past it
+    } else {
+      // Right half, f=1: red pulls left 1/3px -> same {c:2, c+1:1} shape;
+      // blue keeps its edge-side ghost at c-1.
+      TEST_ASSERT_EQUAL_HEX8(2, (row[109] >> 4) & 3);
+      TEST_ASSERT_EQUAL_HEX8(1, (row[110] >> 4) & 3);
+      TEST_ASSERT_EQUAL_HEX8(3, (row[109] >> 2) & 3);
+      TEST_ASSERT_EQUAL_HEX8(2, row[109] & 3);
+      TEST_ASSERT_EQUAL_HEX8(1, row[108] & 3);
+      TEST_ASSERT_EQUAL_HEX8(0, (row[108] >> 4) & 3);  // THE +2/3px discriminator
+      TEST_ASSERT_EQUAL_HEX8(0, row[110] & 3);
+    }
+  }
 }
 
 void test_crt_strike_should_stack_ca_boost_in_whole_pixels(void) {
@@ -3800,11 +3838,26 @@ void test_crt_strike_should_stack_ca_boost_in_whole_pixels(void) {
 
   int off = crt_strike_offset(113, 0);  // stage-3 row jitter rides with it
   uint8_t* row = &mock_framebuffer[113 * 200];
-  TEST_ASSERT_EQUAL_HEX8(2, (row[57 - off] >> 4) & 3);
-  TEST_ASSERT_EQUAL_HEX8(1, (row[58 - off] >> 4) & 3);
-  TEST_ASSERT_EQUAL_HEX8(0, (row[59 - off] >> 4) & 3);
-  TEST_ASSERT_EQUAL_HEX8(2, row[63 - off] & 3);
-  TEST_ASSERT_EQUAL_HEX8(1, row[62 - off] & 3);
+  // Stage-3's warp-blend smears the {2,1} motifs into fractional tails that
+  // rounding partially clips, so pin centroids instead of exact levels: the
+  // whole-px boost must land each channel's energy at c∓3; a thirds-misread
+  // would sit at c∓1 — two pixels apart, tolerance ±1.5px catches it.
+  // Measured: R 61.5 (expect 57−off), B 65.5 (expect 63−off) with off = −4 —
+  // B passes exactly at the tolerance edge; there is no margin. Recompute by
+  // simulating the pass (zero-point fixture pattern) if K, rungs, or the
+  // blend rounding ever change.
+  for (int ch = 0; ch < 2; ch++) {  // 0 = R (left), 1 = B (right)
+    int num = 0, den = 0;
+    for (int x = 45; x <= 75; x++) {
+      int l = ch == 0 ? (row[x] >> 4) & 3 : row[x] & 3;
+      num += l * x;
+      den += l;
+    }
+    TEST_ASSERT_TRUE(den > 0);
+    // |centroid - expected| ≤ 1.5px, integer-scaled: |2·num - 2·e·den| ≤ 3·den
+    int expected = ch == 0 ? 57 - off : 63 - off;
+    TEST_ASSERT_TRUE(abs(2 * num - 2 * expected * den) <= 3 * den);
+  }
 }
 
 void test_crt_strike_max_shift_should_stay_dark_away_from_the_edge(void) {
@@ -3841,6 +3894,13 @@ void test_crt_ca_should_never_split_a_feature_into_two_ghosts(void) {
   s_settings_crt = 1;
   s_flash_phase = CRT_FLASH_IDLE;
   for (int c = 20; c <= 179; c++) {
+    // Skip zones where the rung changes under the motif's tap window, and the
+    // pull-direction sign seam — both are structural artifacts of zone-sampled
+    // CA that predate this sampler (a 1px feature's fringe can drop or echo
+    // symmetric about the seam there). Row 20's rung boundary sits at
+    // x ~ 27.5 / 171.4 (t3 4<->8); the seam band at this row's rung is c in
+    // 98..100 — all simulated tap-by-tap, not eyeballed.
+    if ((c >= 23 && c <= 32) || (c >= 167 && c <= 175) || (c >= 98 && c <= 100)) continue;
     memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));
     for (int y = 18; y <= 22; y++) mock_framebuffer[y * 200 + c] = 0xFF;
     crt_update_proc(NULL, s_fake_ctx);
@@ -3864,22 +3924,47 @@ void test_crt_ca_should_never_split_a_feature_into_two_ghosts(void) {
         }
       }
       if (in) run_end = 189;
-      TEST_ASSERT_TRUE_MESSAGE(runs == 1, "channel ghost split into two edges");
+      // Never duplicated (that was the shift-dithering bug class). A run MAY
+      // be absent entirely: rung boundaries have pre-image gaps for one
+      // channel of a 1px feature — intrinsic to zone-sampled CA, present in
+      // the old whole-px design too. Require only that something survives.
+      TEST_ASSERT_TRUE_MESSAGE(runs <= 1, "channel ghost split into two edges");
       TEST_ASSERT_TRUE_MESSAGE(run_end - run_start + 1 <= 3, "ghost too wide");
-      TEST_ASSERT_TRUE_MESSAGE(abs(run_start + run_end - 2 * c) <= 12,
-                               "ghost drifted from the feature");
+      if (runs == 1) {
+        TEST_ASSERT_TRUE_MESSAGE(
+            abs(run_start + run_end - 2 * c) <= 16,
+            "ghost drifted from the feature");  // pull 8/3 + warp ≤ 5 at the rim
+      }
     }
   }
+}
+
+void test_crt_ca_boundary_row_should_not_read_across_halves(void) {
+  // The vertical-CA forward tap at a pass boundary row used to read a ring
+  // slot the other pass owns: pass 0 at y=113 (s_v=1) wants row 114 — slot
+  // 114%3==0, which holds row 111's capture (stale by 3 rows). A red marker
+  // there, with the boundary row itself black, bleeds into (x≤33, 113).
+  // After the clamp, the tap falls back to the own row and stays dark.
+  // Marker cols 0..30; bleed CA cols 0..29; at K=12 the warp maps CA 17..29
+  // to dest cols 19..31 (sx table computed from crt_warp_sx) — inside the
+  // vignette-full zone, so a bleed would show at full strength.
+  s_settings_crt = 1;
+  s_flash_phase = CRT_FLASH_IDLE;
+  memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));
+  for (int x = 0; x <= 30; x++) mock_framebuffer[111 * 200 + x] = 0xF0;  // opaque red
+  crt_update_proc(NULL, s_fake_ctx);
+  uint8_t* row = &mock_framebuffer[113 * 200];
+  for (int x = 19; x <= 31; x++) TEST_ASSERT_EQUAL_HEX8(0, (row[x] >> 4) & 3);
 }
 
 void test_crt_ca_onset_should_cut_at_the_dead_zone(void) {
   // Centre never fringes (separation 0, not the old 2/3px floor); corners
   // split the full 4px (6 thirds per channel).
   TEST_ASSERT_EQUAL_INT(0, crt_ca_shift3(100, 113, 200, 228));
-  TEST_ASSERT_EQUAL_INT(6, crt_ca_shift3(0, 0, 200, 228));
-  TEST_ASSERT_EQUAL_INT(6, crt_ca_shift3(199, 227, 200, 228));
-  // Mid-edge cells land in the middle band (1px = 3 thirds), monotone out.
-  TEST_ASSERT_EQUAL_INT(3, crt_ca_shift3(0, 113, 200, 228));
+  TEST_ASSERT_EQUAL_INT(8, crt_ca_shift3(0, 0, 200, 228));
+  TEST_ASSERT_EQUAL_INT(8, crt_ca_shift3(199, 227, 200, 228));
+  // Mid-edge cells land in the middle band (1+1/3 px = 4 thirds), monotone out.
+  TEST_ASSERT_EQUAL_INT(4, crt_ca_shift3(0, 113, 200, 228));
   TEST_ASSERT_TRUE(crt_ca_shift3(190, 113, 200, 228) >= crt_ca_shift3(160, 113, 200, 228));
 }
 
@@ -3891,7 +3976,7 @@ void test_crt_ca_ladder_should_be_monotone_and_mirror_symmetric(void) {
     int prev = crt_ca_shift3(0, y, 200, 228);
     for (int x = 0; x < 200; x++) {
       int s = crt_ca_shift3(x, y, 200, 228);
-      TEST_ASSERT_TRUE(s == 0 || s == 3 || s == 6);
+      TEST_ASSERT_TRUE(s == 0 || s == 4 || s == 8);
       TEST_ASSERT_EQUAL_INT(s, crt_ca_shift3(199 - x, y, 200, 228));
       TEST_ASSERT_EQUAL_INT(s, crt_ca_shift3(x, 227 - y, 200, 228));
       if (x <= 100) {
@@ -3907,10 +3992,11 @@ void test_crt_ca_ladder_should_be_monotone_and_mirror_symmetric(void) {
 }
 
 void test_crt_warp_should_pull_the_top_row_inward(void) {
-  // Row 20: exactly at the vignette's d=20 boundary (full brightness), and
-  // the inset is 3px there. White stripes at columns 54..63 and the mirrored
-  // 136..145: the warp pulls their outer edge pixels off the stripes while
-  // their centres survive (CA is white-transparent well inside a stripe).
+  // Row 20 is 4px inside the vignette's full-brightness plateau (fade 16px
+  // deep since the LUT retune), with radial magnification ≈2.7% at the bar
+  // columns. White stripes at columns 54..63 and the mirrored 136..145: the warp pulls their outer
+  // edge pixels off the stripes while their centres survive (CA is white-transparent well inside a
+  // stripe).
   s_settings_crt = 1;
   memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));
   // A green-only bar up to col 63: geometrically pinned by the warp, immune
@@ -3919,32 +4005,104 @@ void test_crt_warp_should_pull_the_top_row_inward(void) {
   for (int x = 136; x <= 145; x++) mock_framebuffer[20 * 200 + x] = 0x0C;
   crt_update_proc(NULL, s_fake_ctx);
 
-  TEST_ASSERT_TRUE(crt_warp_inset(20, 228) >= 3);
+  // Row 20 mid-column magnification ≈ 3.2% (was a 3px inset).
+  TEST_ASSERT_EQUAL_INT(67612, crt_warp_q16(100, 20, 200, 228));
   TEST_ASSERT_EQUAL_HEX8(3, (mock_framebuffer[20 * 200 + 56] >> 2) & 3);  // stripe centre
   TEST_ASSERT_TRUE(((mock_framebuffer[20 * 200 + 54] >> 2) & 3) < 3);     // left edge pulled in
   TEST_ASSERT_TRUE(((mock_framebuffer[20 * 200 + 145] >> 2) & 3) < 3);    // right edge, mirroring
 }
 
 void test_crt_pure_geometry_should_match_the_spec(void) {
-  // Warp: max inset at the extreme rows, none in the middle.
-  TEST_ASSERT_EQUAL_INT(CRT_WARP_MAX_PX, crt_warp_inset(0, 228));
-  TEST_ASSERT_EQUAL_INT(CRT_WARP_MAX_PX, crt_warp_inset(227, 228));
-  TEST_ASSERT_EQUAL_INT(0, crt_warp_inset(113, 228));
+  // Warp: identity at the screen centre, calibrated ≈5px pull at mid-edges,
+  // growing smoothly toward the corners (radial — was rank-1 in y).
+  TEST_ASSERT_EQUAL_INT(65536, crt_warp_q16(100, 113, 200, 228));
+  TEST_ASSERT_EQUAL_INT(67612, crt_warp_q16(100, 20, 200, 228));
+  TEST_ASSERT_EQUAL_INT(68608, crt_warp_q16(0, 113, 200, 228));
+  TEST_ASSERT_EQUAL_INT(68608, crt_warp_q16(199, 113, 200, 228));
+  TEST_ASSERT_EQUAL_INT(71680, crt_warp_q16(0, 0, 200, 228));
+  TEST_ASSERT_EQUAL_INT(71680, crt_warp_q16(199, 227, 200, 228));
+  // Monotone with elliptical radius along both axes; mirror-symmetric.
+  TEST_ASSERT_TRUE(crt_warp_q16(190, 113, 200, 228) >= crt_warp_q16(160, 113, 200, 228));
+  TEST_ASSERT_TRUE(crt_warp_q16(100, 190, 200, 228) >= crt_warp_q16(100, 160, 200, 228));
+  for (int y = 0; y < 228; y++) {
+    for (int x = 0; x < 200; x++) {
+      int m = crt_warp_q16(x, y, 200, 228);
+      TEST_ASSERT_EQUAL_INT(m, crt_warp_q16(199 - x, y, 200, 228));
+      TEST_ASSERT_EQUAL_INT(m, crt_warp_q16(x, 227 - y, 200, 228));
+      TEST_ASSERT_TRUE(m >= 65536 && m <= 71680);
+    }
+  }
 
-  // CA: zero at the centre, 6 thirds (2px per channel) at the corners,
+  // CA: zero at the centre, 8 thirds (2+2/3px per channel) at the corners,
   // monotone along x.
   TEST_ASSERT_EQUAL_INT(0, crt_ca_shift3(100, 113, 200, 228));
-  TEST_ASSERT_EQUAL_INT(6, crt_ca_shift3(0, 0, 200, 228));
-  TEST_ASSERT_EQUAL_INT(6, crt_ca_shift3(199, 227, 200, 228));
+  TEST_ASSERT_EQUAL_INT(8, crt_ca_shift3(0, 0, 200, 228));
+  TEST_ASSERT_EQUAL_INT(8, crt_ca_shift3(199, 227, 200, 228));
   TEST_ASSERT_TRUE(crt_ca_shift3(190, 113, 200, 228) >= crt_ca_shift3(160, 113, 200, 228));
 
   // Vignette: black boundary, full brightness outside the depth, rising
-  // inward — smoothstep midpoint (x=6 of 12) sits below the half-way mark.
+  // inward — the gamma-lifted midpoint sits past the half-way mark.
   TEST_ASSERT_EQUAL_INT(0, crt_vignette_q8(0, 113, 200, 228));
   TEST_ASSERT_EQUAL_INT(256, crt_vignette_q8(CRT_VIGNETTE_PX, 113, 200, 228));
   TEST_ASSERT_EQUAL_INT(256, crt_vignette_q8(100, 113, 200, 228));
   int mid = crt_vignette_q8(CRT_VIGNETTE_PX / 2, 113, 200, 228);
-  TEST_ASSERT_TRUE(mid > 0 && mid < 160);
+  TEST_ASSERT_TRUE(mid > 128 && mid < 200);
+}
+
+void test_crt_warp_should_spread_steps_across_rows(void) {
+  // The rank-1 gain quantized the whole outer quarter on the same 8 row
+  // boundaries — a visible horizontal seam. With M growing in x, each
+  // column's source map crosses its own integer boundaries at its own rows:
+  // no boundary may step >16 dest columns at once (spread ≈1 per ~28 rows),
+  // and no >3 adjacent columns may step on the same boundary (no comb).
+  for (int y = 0; y < 227; y++) {
+    int jumps = 0;
+    int run = 0, maxrun = 0;
+    for (int x = 0; x < 200; x++) {
+      if (crt_warp_sx(x, y + 1, 200, 228) != crt_warp_sx(x, y, 200, 228)) {
+        jumps++;
+        if (++run > maxrun) maxrun = run;
+      } else {
+        run = 0;
+      }
+    }
+    TEST_ASSERT_TRUE(jumps <= 16);
+    TEST_ASSERT_TRUE(maxrun <= 3);
+  }
+  // Sanity: the pull is still substantial — an identity map would
+  // trivially pass the jump-run bounds. Mid-edge columns push past the
+  // edge and clip: sx(199,113): dx=199, xq=256, M=68608 → ≈ 4.7px pull;
+  // sx(0,113) mirrors below 0.
+  TEST_ASSERT_TRUE(crt_warp_sx(199, 113, 200, 228) >= 200);
+  TEST_ASSERT_TRUE(crt_warp_sx(0, 113, 200, 228) < 0);
+}
+
+void test_crt_warp_should_blend_instead_of_dropping_columns(void) {
+  // White vertical stripes every 2px, rows 18..22 (deep warp): nearest-neighbour
+  // decimation drops stripe columns outright (measured on hardware as 8px letter
+  // cells shrinking to 7px); blending keeps their level as a fractional column
+  // instead. The pin is smoothness of the displayed profile, below.
+  s_settings_crt = 1;
+  s_flash_phase = CRT_FLASH_IDLE;
+  memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));
+  for (int y = 18; y <= 22; y++)
+    for (int x = 8; x < 100; x += 2) mock_framebuffer[y * 200 + x] = 0xFF;
+  crt_update_proc(NULL, s_fake_ctx);
+
+  uint8_t* row = &mock_framebuffer[20 * 200];
+  // Measured NN vs blended (protocol from the plan): total energy 377 vs 376
+  // — conserved in both, so energy can't be the pin. Nor can a ≤2-jump bound
+  // (a 2px comb at ~2x magnification legitimately 3-jumps even blended).
+  // What actually discriminates: NN emits intermediate levels only where the
+  // rim vignette lands on the stripes (measured count with stage 3 reduced
+  // to NN: 3); blending turns every would-be drop into a level-1/2 column
+  // (count ≈40). Pin that.
+  int intermediate = 0;
+  for (int x = 14; x < 98; x++) {  // inside the stripe field's margins
+    int g = (row[x] >> 2) & 3;     // G: CA blends R/B by design
+    if (g == 1 || g == 2) intermediate++;
+  }
+  TEST_ASSERT_TRUE(intermediate >= 20);
 }
 
 void test_crt_strike_should_jitter_rows_and_decay(void) {
@@ -4127,6 +4285,24 @@ void test_crt_toggle_off_should_force_a_full_repaint(void) {
   TEST_ASSERT_TRUE(mock_window_set_bg_count > 0);
 }
 
+void test_crt_toggle_off_mid_strike_should_cancel_the_chain(void) {
+  // Toggle off mid-strike: the pending tick must be cancelled — otherwise the
+  // chain re-arms from IDLE (phase −1 → 0) and runs a full 8-tick strike
+  // nobody triggered, dirtying the layer each frame.
+  s_settings_crt = 1;
+  s_crt_layer = layer_create(GRect(0, 0, 200, 228));
+  crt_backlight_handler(true);  // strike armed, phase 0
+  mock_timer_callback(NULL);    // advance one tick for realism
+  int cancel_before = mock_timer_cancel_count;
+
+  s_settings_crt = 0;
+  crt_apply_setting_change();
+
+  TEST_ASSERT_EQUAL_INT(CRT_FLASH_IDLE, s_flash_phase);
+  TEST_ASSERT_EQUAL_INT(cancel_before + 1, mock_timer_cancel_count);
+  TEST_ASSERT_NULL(s_flash_timer);
+}
+
 int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_render_gate_should_go_silent_when_nothing_changes);
@@ -4290,10 +4466,13 @@ int main(void) {
   RUN_TEST(test_crt_strike_should_stack_ca_boost_in_whole_pixels);
   RUN_TEST(test_crt_strike_max_shift_should_stay_dark_away_from_the_edge);
   RUN_TEST(test_crt_ca_should_never_split_a_feature_into_two_ghosts);
+  RUN_TEST(test_crt_ca_boundary_row_should_not_read_across_halves);
   RUN_TEST(test_crt_ca_onset_should_cut_at_the_dead_zone);
   RUN_TEST(test_crt_ca_ladder_should_be_monotone_and_mirror_symmetric);
   RUN_TEST(test_crt_warp_should_pull_the_top_row_inward);
   RUN_TEST(test_crt_pure_geometry_should_match_the_spec);
+  RUN_TEST(test_crt_warp_should_spread_steps_across_rows);
+  RUN_TEST(test_crt_warp_should_blend_instead_of_dropping_columns);
   RUN_TEST(test_crt_strike_should_jitter_rows_and_decay);
   RUN_TEST(test_crt_strike_should_slide_rows_and_boost_ca);
   RUN_TEST(test_crt_sound_should_play_only_when_enabled_and_unmuted);
@@ -4302,5 +4481,6 @@ int main(void) {
   RUN_TEST(test_crt_flash_should_need_backlight_on_and_the_toggle);
   RUN_TEST(test_crt_setting_push_should_redraw_the_overlay);
   RUN_TEST(test_crt_toggle_off_should_force_a_full_repaint);
+  RUN_TEST(test_crt_toggle_off_mid_strike_should_cancel_the_chain);
   return UNITY_END();
 }

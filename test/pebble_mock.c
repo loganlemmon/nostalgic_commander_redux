@@ -87,17 +87,21 @@ AppMessageOutboxFailed app_message_register_outbox_failed(AppMessageOutboxFailed
 }
 
 int mock_timer_register_count = 0;
+int mock_timer_cancel_count = 0;
 uint32_t mock_timer_last_ms = 0;
 AppTimerCallback mock_timer_callback = NULL;
+static int s_mock_timer_token;  // sentinel handle — arms are addressable
 AppTimer* app_timer_register(uint32_t timeout_ms, AppTimerCallback callback, void* callback_data) {
   (void)callback_data;
   // Recorded, not scheduled: host tests fire delayed callbacks by calling
-  // mock_timer_callback(NULL) directly. The NULL return matches the SDK's
-  // pool-exhausted case; callers tolerate it (see main.c's weather retry).
+  // mock_timer_callback(NULL) directly. Returns a sentinel handle, not NULL —
+  // callers that cancel an armed arm (crt.c's strike chain) must be
+  // observable; nothing exercises the SDK's pool-exhausted NULL case against
+  // the returned handle (main.c's weather retry ignores it).
   mock_timer_register_count++;
   mock_timer_last_ms = timeout_ms;
   mock_timer_callback = callback;
-  return NULL;
+  return &s_mock_timer_token;
 }
 bool app_timer_reschedule(AppTimer* timer, uint32_t new_timeout_ms) {
   (void)timer;
@@ -106,6 +110,7 @@ bool app_timer_reschedule(AppTimer* timer, uint32_t new_timeout_ms) {
 }
 void app_timer_cancel(AppTimer* timer) {
   (void)timer;
+  mock_timer_cancel_count++;
 }
 
 int mock_backlight_subscribe_count = 0;
@@ -685,6 +690,7 @@ void mock_reset(void) {
   mock_backlight_unsubscribe_count = 0;
   mock_backlight_handler = NULL;
   mock_timer_register_count = 0;
+  mock_timer_cancel_count = 0;
   mock_timer_last_ms = 0;
   mock_timer_callback = NULL;
   mock_fb_capture_count = 0;

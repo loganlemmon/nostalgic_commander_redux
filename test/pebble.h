@@ -422,6 +422,7 @@ extern BacklightHandler mock_backlight_handler;
 // app_timer_register records its last call so tests can fire a delayed
 // callback manually: invoke mock_timer_callback(NULL) and assert the timeout.
 extern int mock_timer_register_count;
+extern int mock_timer_cancel_count;
 extern uint32_t mock_timer_last_ms;
 extern AppTimerCallback mock_timer_callback;
 // The mock screen: capture/_release wrap this buffer, tests stage into and

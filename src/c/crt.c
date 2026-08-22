@@ -26,19 +26,38 @@ static int isqrt_floor(int v) {
 // the vignette falloff shows as dither pattern, not banded steps.
 static const uint8_t s_bayer4[16] = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
 
-int crt_warp_inset(int y, int h) {
-  int dy = 2 * y - (h - 1);  // -(h-1)..h-1
-  return (CRT_WARP_MAX_PX * dy * dy) / ((h - 1) * (h - 1));
+// Radial magnification of the curvature stage, Q16. Identity at the centre,
+// K per unit of the elliptical squared radius (same xq/yq formulation as the
+// CA zone map). K=12 gives ≈4.7px pull at a mid-edge, tuned on hardware
+// against the 16px vignette (K=13's 5px bent the rim darkening over the
+// bright side frames). Grows smoothly to 1.09x in the corners — a curved
+// surface bows its sides too, so mid-height now warps where the old y-only
+// gain was identity. Rank-1 quantized all outer columns on the same row
+// boundaries (visible seams); the per-column boundary curve does not.
+int crt_warp_q16(int x, int y, int w, int h) {
+  int dx = 2 * x - (w - 1);
+  int dy = 2 * y - (h - 1);
+  int xq = (dx * dx * 256) / ((w - 1) * (w - 1));
+  int yq = (dy * dy * 256) / ((h - 1) * (h - 1));
+  return 65536 + CRT_WARP_R2_K * (xq + yq);
+}
+
+// Source column for dest (x,y) under the warp, without strike jitter —
+// nearest-rounded. Pin target only: the pass works in floor+frac of the same
+// S (for the blend), a half-px phase offset from this form.
+int crt_warp_sx(int x, int y, int w, int h) {
+  int dx = 2 * x - (w - 1);
+  return ((w - 1) * 65536 + dx * crt_warp_q16(x, y, w, h) + 65536) >> 17;
 }
 
 // Horizontal CA rung from the squared Q8 radius (units: xq + yq from
 // crt_ca_shift3), returning per-channel displacement in THIRDS of a pixel:
-// 0 / 3 / 6 = 0 / 1 / 2 px. Thirds because the pass now samples channels
-// fractionally (two weighted taps) instead of copying whole neighbours —
-// see stage 1 in crt_apply_framebuffer. Zone boundaries squared once:
-//   rq ≥ R ⇔ xq+yq ≥ ceil(R²/256) — so no per-pixel sqrt is needed.
+// 0 / 4 / 8 = 0 / 1+1/3 / 2+2/3 px. Thirds because the pass now samples
+// channels fractionally (two weighted taps) instead of copying whole
+// neighbours — see stage 1 in crt_apply_framebuffer. Zone boundaries squared
+// once: rq ≥ R ⇔ xq+yq ≥ ceil(R²/256) — so no per-pixel sqrt is needed.
 static int crt_ca_t3_h2(int xy_sum) {
-  return xy_sum < CRT_CA_R2_X2Q8 ? 0 : (xy_sum < CRT_CA_R3_X2Q8 ? 3 : 6);
+  return xy_sum < CRT_CA_R2_X2Q8 ? 0 : (xy_sum < CRT_CA_R3_X2Q8 ? 4 : 8);
 }
 // Vertical wider zones, 1px max, same formulation.
 static int crt_ca_shift_v2(int xy_sum) {
@@ -69,11 +88,14 @@ static int crt_edge_distance(int x, int y, int w, int h) {
   return ex < ey ? ex : ey;
 }
 
-// The vignette falloff over edge-depth d, smoothstepped, Q8. A LUT: the pass
-// does no per-pixel division, which is what kept the wake-up at 3–4 fps on
-// hardware.
+// The vignette falloff over edge-depth d, Q8; smoothstep gamma-lifted by 0.7 —
+// 4 levels quantize the raw smoothstep into a noticed black cliff near the rim
+// (hardware A/B: the fade 'started too sharp'). Lifting the low half softens
+// the rim start and raises the mid band ~15% without widening the fade.
+// A LUT: the pass does no per-pixel division, which is what kept the wake-up
+// at 3–4 fps on hardware.
 static const uint16_t s_vignette_q8[CRT_VIGNETTE_PX + 1] = {
-    0, 1, 6, 15, 26, 40, 54, 71, 89, 108, 128, 145, 165, 183, 200, 216, 228, 240, 248, 254, 256};
+    0, 11, 28, 48, 70, 92, 114, 136, 158, 178, 196, 213, 227, 239, 248, 254, 256};
 
 // Same falloff without per-pixel arithmetic (the LUT above carries it).
 static int crt_vignette_q8_from_depth(int d) {
@@ -158,18 +180,20 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
       //    sample per shifted channel (thirds-of-a-px pull); vertical
       //    fringe samples ring rows toward/away from the centreline.
       for (int x = 0; x < w; x++) {
-        // Horizontal pull in THIRDS: the rung (0/3/6) minus one third to
-        // cancel the RGB stripe's built-in element offset (R sits 1/3px
-        // left of the pixel centre, B 1/3px right — G at the centre stays
-        // untapped), plus the strike boost in whole pixels. The −1 makes
-        // the dead zone actually converge: at the centre the red and blue
-        // rasters land on the content, not a 2/3px apart.
-        int q = crt_ca_t3_h2(s_ca_xq[x] + yterm) - 1 + 3 * ca_boost;
+        bool left = x * 2 < w - 1;
+        // Horizontal pull in THIRDS: the rung (0/4/8), plus the element-offset
+        // correction and the strike boost in whole pixels. The correction does
+        // NOT mirror: the RGB stripe puts R 1/3px left (B 1/3px right) of its
+        // pixel centre on BOTH halves, so the sign follows the half, not the
+        // pull direction — folding a flat -1 into q before the tap mirror
+        // (old form) carried a 2/3px residual splay through the right half,
+        // measured on hardware. The cancellation makes the dead zone actually
+        // converge: at the centre the rasters land on the content.
+        int q = crt_ca_t3_h2(s_ca_xq[x] + yterm) + (left ? -1 : 1) + 3 * ca_boost;
         int j = (q - (q < 0 ? 2 : 0)) / 3;  // floor(q/3); q >= -1 by construction
-        int f = q - 3 * j;                  // 0..2 (2 for every current rung: q ≡ -1 mod 3)
+        int f = q - 3 * j;                  // 0..2 — all three occur across current rungs
         int s_v = crt_ca_shift_v2(s_ca_xq[x] + yterm);
 
-        bool left = x * 2 < w - 1;
         bool top = y * 2 < h - 1;
         // Sampling signs: left half pulls R from the right; top half pulls R
         // from below. Mirrors across both centrelines. Forward reads (below on
@@ -181,9 +205,16 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
         int bt1 = left ? x - j - 1 : x + j + 1;
         int ry = top ? y + s_v : y - s_v;
         int by = top ? y - s_v : y + s_v;
+        // The ring only holds rows this pass has captured; at the half
+        // boundary the forward tap's row belongs to the OTHER pass (its slot
+        // carries a 3-rows-stale capture — pass 0 at y=113 would read row
+        // 111). Fall back to the own row; only the forward read can cross.
+        if (pass == 0 && ry > (h - 1) / 2) ry = y;
+        if (pass == 1 && ry <= (h - 1) / 2) ry = y;
         // Both taps of a channel come from the same (valid) ring ROW; clamp
-        // the COLUMNS — at max strike (j=4) they land on the same edge
-        // column and the weighted sample degenerates to a plain copy.
+        // the COLUMNS — at max strike the right half reaches q = 8+1+9 = 18
+        // (rung + sign fix + 3·boost) → j = 6, and the taps land on the same
+        // edge column and the weighted sample degenerates to a plain copy.
         if (rt0 < 0) rt0 = 0;
         if (rt0 >= w) rt0 = w - 1;
         if (rt1 < 0) rt1 = 0;
@@ -201,21 +232,20 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
 
         const uint8_t* rrow = s_vraw_ring[ry % 3];
         const uint8_t* brow = s_vraw_ring[by % 3];
-        // Fractional channel sample: ((3-f)*near + f*far)/3. A 0↔3 edge
-        // yields exactly 2 and 1 — a real centroid shift with no duplicated
-        // ghost and no spatial pattern. Truncating divide: code values are
-        // linear in light here (the panel makes levels by area fill), so no
+        // Fractional channel sample: sum of both taps weighted (3-f, f),
+        // rounded to nearest — plain truncation biased R/B down half a level
+        // on average, a faint green cast on mid-tones (G is never blended).
+        // A 0<->3 edge yields exactly 2 and 1; weights act on code values,
+        // linear in light here (the panel makes levels by area fill) — no
         // gamma round trip.
-        int r = ((3 - f) * ((rrow[rt0] >> 4) & 3) + f * ((rrow[rt1] >> 4) & 3)) / 3;
-        int b = ((3 - f) * (brow[bt0] & 3) + f * (brow[bt1] & 3)) / 3;
+        int r = ((3 - f) * ((rrow[rt0] >> 4) & 3) + f * ((rrow[rt1] >> 4) & 3) + 1) / 3;
+        int b = ((3 - f) * (brow[bt0] & 3) + f * (brow[bt1] & 3) + 1) / 3;
         row_ca[x] = GCOLOR8_ALPHA | (uint8_t)(r << 4) | (row[x] & 0x0C) | (uint8_t)b;
       }
 
       // 2) Vignette + dither on the CA'd row — dimming in content space, so
       //    the curvature pass below bends the already-darkened rim with the
       //    image. Mirror-symmetric Bayer thresholds keep both rims identical.
-      int inset = crt_warp_inset(y, h);
-      int mul16 = (w << 16) / (w - 2 * inset);  // Q16 jacobian; ==65536 mid-rows
       int ey = y < h - 1 - y ? y : h - 1 - y;
       int ty = ey & 3;
       bool corner_row = ey < CRT_CORNER_RADIUS;
@@ -239,17 +269,39 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
         row_ca[x] = GCOLOR8_ALPHA | (uint8_t)((r << 4) | (g << 2) | b);
       }
 
-      // 3) Curvature (+ strike jitter): source column
-      //    sx = cx + (x - cx) * (w / (w - 2*inset)), cx=(w-1)/2, then the strike
-      //    slides the whole row sideways. Rounded to nearest on BOTH signs — a
-      //    >> on negative deltas floors away from zero and clipped the left rim
-      //    a quantum earlier than the right (visible on hardware as a left-edge
-      //    shift under each header).
+      // 3) Curvature (+ strike jitter): dest (x,y) samples source column
+      //    sx = cx + (x - cx)·M(x,y)/65536 with the radial M of crt_warp_q16 —
+      //    recomposed here from the CA stage's cached terms — then the strike
+      //    slides the whole row sideways. M grows with x too, so integer
+      //    quantization boundaries curve instead of aligning into seams.
+      //    sn's +half cancels exactly in S below: stage 3 no longer rounds —
+      //    floor(S) + fraction IS the warp position. Rim symmetry survives
+      //    without rounding: floor+frac is pointwise symmetric in dx (the
+      //    floor(−a) vs floor(a) ±1 phases sit under the vignette's black
+      //    rim). The fraction then blends the column pair instead of picking
+      //    one: magnification decimates source columns under nearest-
+      //    neighbour (every damaged 8px letter cell measured 7px wide), and
+      //    keeping their energy as fractional levels reads as tube edge
+      //    defocus while letters keep their rhythm. Rounding (+128) avoids a
+      //    truncation bias toward dark.
       for (int x = 0; x < w; x++) {
         int dx = 2 * x - (w - 1);
+        int mul16 = 65536 + CRT_WARP_R2_K * (s_ca_xq[x] + yterm);
         int sn = (w - 1) * 65536 + dx * mul16 + 65536;  // sx*131072 + half
-        int sx = (sn >> 17) + row_off;
-        row[x] = (sx < 0 || sx >= w) ? GCOLOR8_OPAQUE_BLACK : row_ca[sx];
+        int S = sn - 65536;                             // exact warp position, Q17
+        int sx = (S >> 17) + row_off;                   // strike stays whole-pixel
+        if (sx < 0 || sx >= w) {
+          row[x] = GCOLOR8_OPAQUE_BLACK;
+          continue;
+        }
+        int fr = (S >> 9) & 0xFF;  // 0..255, weight toward sx+1
+        int sx1 = sx + 1;
+        if (sx1 >= w) sx1 = w - 1;
+        uint8_t p0 = row_ca[sx], p1 = row_ca[sx1];
+        int r = ((256 - fr) * ((p0 >> 4) & 3) + fr * ((p1 >> 4) & 3) + 128) >> 8;
+        int g = ((256 - fr) * ((p0 >> 2) & 3) + fr * ((p1 >> 2) & 3) + 128) >> 8;
+        int b = ((256 - fr) * (p0 & 3) + fr * (p1 & 3) + 128) >> 8;
+        row[x] = GCOLOR8_ALPHA | (uint8_t)((r << 4) | (g << 2) | b);
       }
     }
   }
@@ -380,6 +432,12 @@ void crt_apply_setting_change(void) {
     return;
   }
   s_flash_phase = CRT_FLASH_IDLE;
+  // Mid-strike toggle-off: kill the armed chain, or the next tick re-arms
+  // from IDLE into a full strike nobody asked for.
+  if (s_flash_timer) {
+    app_timer_cancel(s_flash_timer);
+    s_flash_timer = NULL;
+  }
   // Off must ERASE, not just stop painting: the shader's pixels live in the
   // shared framebuffer and the next paint of anything underneath only happens
   // at the minute edge. Re-applying the window background dirties the whole
