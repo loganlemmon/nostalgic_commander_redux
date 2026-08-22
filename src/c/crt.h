@@ -30,9 +30,9 @@ extern Layer* s_crt_layer;
 #define CRT_CA_R2V_Q8 170
 
 // Squared thresholds for the zone compare — no per-pixel sqrt needed.
-#define CRT_CA_R2_X2Q8 (CRT_CA_R2_Q8 * CRT_CA_R2_Q8 + 255 >> 8)
-#define CRT_CA_R3_X2Q8 (CRT_CA_R3_Q8 * CRT_CA_R3_Q8 + 255 >> 8)
-#define CRT_CA_R2V_X2Q8 (CRT_CA_R2V_Q8 * CRT_CA_R2V_Q8 + 255 >> 8)
+#define CRT_CA_R2_X2Q8 ((CRT_CA_R2_Q8 * CRT_CA_R2_Q8 + 255) >> 8)
+#define CRT_CA_R3_X2Q8 ((CRT_CA_R3_Q8 * CRT_CA_R3_Q8 + 255) >> 8)
+#define CRT_CA_R2V_X2Q8 ((CRT_CA_R2V_Q8 * CRT_CA_R2V_Q8 + 255) >> 8)
 
 // The wake-up: a degauss strike. On backlight-on, FRAMES 50ms ticks of
 // per-row horizontal jitter with decaying amplitude plus amplified channel
@@ -52,8 +52,8 @@ int crt_strike_offset(int y, int flash_phase);
 // Horizontal source inset at row y: 0 at the middle row, growing to
 // CRT_WARP_MAX_PX at the top/bottom rows (the screen "bends away").
 int crt_warp_inset(int y, int h);
-// CA channel-sample offset in px at (x,y): 0 at the centre, growing with the
-// squared distance to CRT_CA_MAX_SHIFT at the extreme pixels.
+// CA channel-sample offset in px at (x,y): 0 inside the dead zone, 1 or 2
+// toward the edge — see crt.h's CRT_CA_R*_Q8 zone map.
 int crt_ca_shift(int x, int y, int w, int h);
 
 // The whole pass over an 8-bit GColor8 framebuffer (0xAARRGGBB packed bytes,
@@ -63,9 +63,9 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase);
 void crt_update_proc(Layer* layer, GContext* ctx);
 void crt_backlight_handler(bool on);
 
-// The strike's degauss crackle, as a note table played at backlight-on when
-// the sound toggle is on: a static-tick opener (short square), then a falling
-// triangle glissando. Nothing synthesized — the speaker API's own voices.
+// Synthesises the degauss woomp to PCM once, then plays it via the speaker
+// API. Silent when the speaker is muted by system preference (including
+// Quiet Time when the user set it to mute).
 void crt_play_strike_sound(void);
 // Settings push may have flipped the toggle: sync the flash state and mark
 // the overlay dirty; turning off repaints — the OFF frame is painted by the

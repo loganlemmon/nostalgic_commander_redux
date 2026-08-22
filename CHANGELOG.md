@@ -26,8 +26,8 @@ All notable changes to Nostalgic Commander. Format follows
   with decaying amplitude while the channel separation balloons, over eight
   frames (~700 ms). Timed in wide gaps so the sound pipeline keeps up.
 - **CRT degauss sound** setting (off by default): a falling low woomp over
-  the strike. Honors system mute and Quiet Time. Only plays with the CRT
-  effect on.
+  the strike. Honors the system speaker-mute preference (Quiet Time included
+  if so configured). Only plays with the CRT effect on.
 ## [1.6.0] - 2026-08-17
 
 ### Added

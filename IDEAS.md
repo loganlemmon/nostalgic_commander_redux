@@ -13,6 +13,15 @@ rejected it gets deleted (git history remembers). Proposals welcome — see
   (`↗ 12k`). A next-12h max-gust variant was floated and dropped; revisit
   only if someone asks.
 
+## Rendering
+
+- CRT effect at subpixel resolution: use the panel's own R/G/B elements to make
+  the chromatic aberration continuous instead of three banded zones, and to draw
+  the aperture grille the effect currently has no way to show. Blocked on one
+  hardware fact (the colour-filter geometry, which PebbleOS does not state) and
+  invisible in the emulator. Design:
+  [docs/superpowers/specs/2026-08-22-crt-subpixel-design.md](docs/superpowers/specs/2026-08-22-crt-subpixel-design.md).
+
 ## Interactions
 
 > **Platform note (June 2026):** touchscreen interactions are off the table

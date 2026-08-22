@@ -12,6 +12,7 @@
 // Current warm-up phase, or CRT_FLASH_IDLE. Advanced by the self-re-arming
 // flash tick; written by crt_backlight_handler on backlight-on.
 static int s_flash_phase = CRT_FLASH_IDLE;
+static AppTimer* s_flash_timer = NULL;  // latest tick arm — cancelled on retrigger
 
 static int isqrt_floor(int v) {
   if (v <= 0) return 0;
@@ -28,11 +29,6 @@ static const uint8_t s_bayer4[16] = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15,
 int crt_warp_inset(int y, int h) {
   int dy = 2 * y - (h - 1);  // -(h-1)..h-1
   return (CRT_WARP_MAX_PX * dy * dy) / ((h - 1) * (h - 1));
-}
-
-// Vertical CA runs slimmer: 1px max, engages closer to the edges.
-static int crt_ca_shift_v(int rq) {
-  return rq < CRT_CA_R2_V_Q8 ? 0 : 1;
 }
 
 // Horizontal CA rung from the squared Q8 radius (units: xq + yq from
@@ -115,7 +111,7 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
   static uint8_t row_ca[200];
   static uint16_t s_ca_xq[200];
   static int s_ca_xq_w = 0;
-  if (w > (int)sizeof(row_ca)) return;
+  if (w > (int)sizeof(row_ca) || w <= 1 || h <= 1) return;
   if (s_ca_xq_w != w) {
     for (int x = 0; x < w; x++) {
       int dx = 2 * x - (w - 1);
@@ -148,15 +144,18 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
       // both halves and the ring can only hold what traversal has seen.
       memcpy(s_vraw_ring[y % 3], row, w);
       int y_next = pass == 0 ? y + 1 : y - 1;
-      if (y_next >= 0 && y_next < h) memcpy(s_vraw_ring[y_next % 3], fb + (size_t)y_next * w, w);
+      // Lookahead stays inside this pass's own half: the other half's rows may
+      // already carry processed output by traversal time (ring reads raw).
+      bool owns_next = pass == 0 ? y_next <= (h - 1) / 2 : y_next > (h - 1) / 2;
+      if (owns_next && y_next >= 0 && y_next < h) {
+        memcpy(s_vraw_ring[y_next % 3], fb + (size_t)y_next * w, w);
+      }
 
       // 1) CA from raw sources: horizontal fringe samples the row, vertical
       //    fringe samples ring rows toward/away from the centreline.
       for (int x = 0; x < w; x++) {
-        int dx = 2 * x - (w - 1);
-        int xq = (dx * dx * 256) / ((w - 1) * (w - 1));
-        int s_h = crt_ca_shift_h2(xq + yterm) + ca_boost;
-        int s_v = crt_ca_shift_v2(xq + yterm);
+        int s_h = crt_ca_shift_h2(s_ca_xq[x] + yterm) + ca_boost;
+        int s_v = crt_ca_shift_v2(s_ca_xq[x] + yterm);
 
         bool left = x * 2 < w - 1;
         bool top = y * 2 < h - 1;
@@ -172,8 +171,6 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
         if (rx >= w) rx = w - 1;
         if (bx < 0) bx = 0;
         if (bx >= w) bx = w - 1;
-        // The ring holds rows y-2..y+2 at most; s_v stays within 1 today.
-        // Both halves only read rows already captured into the ring.
         // The ring holds rows y-2..y+2 at most; s_v stays within 1 today.
         // Both halves only read rows already captured into the ring.
         if (ry < 0) ry = 0;
@@ -244,13 +241,14 @@ void crt_update_proc(Layer* layer, GContext* ctx) {
 static void crt_flash_tick(void* data) {
   (void)data;
   s_flash_phase++;
-  if (s_flash_phase >= CRT_FLASH_PHASES) s_flash_phase = CRT_FLASH_IDLE;
+  if (s_flash_phase >= CRT_FLASH_PHASES) {
+    s_flash_phase = CRT_FLASH_IDLE;
+    s_flash_timer = NULL;
+  }
   if (s_crt_layer) layer_mark_dirty(s_crt_layer);
-  // One-shot timers free themselves on firing. A NULL return (pool
-  // exhausted) just ends the flash early — the next backlight-on restarts it
-  // at the strike phase anyway.
+  // One-shot timers free themselves on firing.
   if (s_flash_phase != CRT_FLASH_IDLE) {
-    app_timer_register(CRT_FLASH_TICK_MS, crt_flash_tick, NULL);
+    s_flash_timer = app_timer_register(CRT_FLASH_TICK_MS, crt_flash_tick, NULL);
   }
 }
 
@@ -259,21 +257,26 @@ void crt_backlight_handler(bool on) {
   // backlight-off transitions and a disabled effect start nothing.
   if (!on || !s_settings_crt) return;
   s_flash_phase = 0;
+  // A second backlight-on mid-strike would fork a second tick chain; kill the
+  // previous arm and restart the phase clean.
+  if (s_flash_timer) {
+    app_timer_cancel(s_flash_timer);
+    s_flash_timer = NULL;
+  }
   crt_play_strike_sound();
   if (s_crt_layer) layer_mark_dirty(s_crt_layer);
-  app_timer_register(CRT_FLASH_TICK_MS, crt_flash_tick, NULL);
+  s_flash_timer = app_timer_register(CRT_FLASH_TICK_MS, crt_flash_tick, NULL);
 }
 
 // The degauss woomp as synthesized PCM: note-table playback clicks at every
 // note boundary (pitch and velocity step), so the hum is generated instead —
-// a pitch-gliding sine (≈95 → 65 Hz) under a swell-and-decay amplitude
+// a pitch-gliding sine (≈90 → 55 Hz) under a swell-and-decay amplitude
 // envelope. Continuous by construction. 320ms at 16 kHz 16-bit sits well
 // under SPEAKER_MAX_SAMPLE_BYTES_TOTAL. Synthesized once on first use.
 #define CRT_STRIKE_PCM_MS 320
 #define CRT_STRIKE_PCM_RATE 16000
 #define CRT_STRIKE_PCM_SAMPLES (CRT_STRIKE_PCM_MS * CRT_STRIKE_PCM_RATE / 1000)
-// DMA'd to the codec verbatim — keep the buffer word-aligned.
-static int16_t s_strike_pcm[CRT_STRIKE_PCM_SAMPLES] __attribute__((aligned(4)));
+static int16_t s_strike_pcm[CRT_STRIKE_PCM_SAMPLES];
 static bool s_strike_pcm_ready = false;
 
 // Q15 sine: |x| in [-1,1] shaped by the cubic smoothstep y = (3x − x³)/2 —
@@ -321,8 +324,8 @@ void crt_strike_synth(int16_t* buf, size_t n) {
 }
 
 void crt_play_strike_sound(void) {
-  // speaker_is_muted covers both system mute and Quiet Time; honor it, and
-  // the sound toggle.
+  // speaker_is_muted covers the system mute preference (including Quiet
+  // Time-mutes-speaker when the user set it). Honor it, and our own toggle.
   if (!s_settings_crt_sound || speaker_is_muted()) return;
   if (!s_strike_pcm_ready) {
     crt_strike_synth(s_strike_pcm, CRT_STRIKE_PCM_SAMPLES);

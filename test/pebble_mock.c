@@ -488,9 +488,15 @@ GRect layer_get_unobstructed_bounds(const Layer* layer) {
   return mock_unobstructed_bounds;
 }
 int mock_mark_dirty_count = 0;
+int mock_set_hidden_count = 0;
 void layer_mark_dirty(Layer* layer) {
   (void)layer;
   mock_mark_dirty_count++;
+}
+void layer_set_hidden(Layer* layer, bool hidden) {
+  (void)layer;
+  (void)hidden;
+  mock_set_hidden_count++;
 }
 void layer_set_update_proc(Layer* layer, LayerUpdateProc update_proc) {
   (void)layer;
@@ -667,6 +673,7 @@ void mock_reset(void) {
   mock_health_peek_count = 0;
   mock_health_values_reset();
   mock_mark_dirty_count = 0;
+  mock_set_hidden_count = 0;
   mock_set_text_count = 0;
   mock_set_text_color_count = 0;
   mock_last_text[0] = '\0';

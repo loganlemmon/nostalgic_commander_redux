@@ -373,6 +373,7 @@ void layer_destroy(Layer* layer);
 GRect layer_get_bounds(const Layer* layer);
 GRect layer_get_unobstructed_bounds(const Layer* layer);
 void layer_mark_dirty(Layer* layer);
+void layer_set_hidden(Layer* layer, bool hidden);
 void layer_set_update_proc(Layer* layer, LayerUpdateProc update_proc);
 bool persist_exists(const uint32_t key);
 int32_t persist_read_int(const uint32_t key);
@@ -403,6 +404,7 @@ extern bool mock_clock_24h;
 extern bool mock_outbox_begin_ok;
 extern int mock_outbox_sends;
 extern int mock_mark_dirty_count;
+extern int mock_set_hidden_count;
 extern int mock_set_text_count;
 extern int mock_set_text_color_count;
 extern char mock_last_text[32];  // most recent text_layer_set_text payload

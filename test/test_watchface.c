@@ -83,6 +83,7 @@ static void reset_all_state(void) {
 
   s_shown_time[0] = '\0';
   s_flash_phase = CRT_FLASH_IDLE;
+  s_flash_timer = NULL;
   s_crt_layer = NULL;
   s_canvas_layer = NULL;
   s_main_window = NULL;
