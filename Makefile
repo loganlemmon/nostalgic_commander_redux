@@ -42,10 +42,12 @@ VISUAL_DIFF = /tmp/nc_visual_diff.png
 # Mask rects ("x0,y0 x1,y1", inclusive) — exactly the regions that move
 # between runs, derived by diffing consecutive captures; everything else is
 # gated pixel-for-pixel.
-#   CLOCK:   the clock digits (layout.h CLOCK_RECT) — minute/hour roll
+#   CLOCK:   the clock digits (layout.h CLOCK_RECT) — minute/hour roll; bottom
+#            edge +2 rows: vertical CA bleeds glyph ink one row below the
+#            window (row 113 flakes on wide-digit minutes)
 #   DATE:    the centre-slot date text — wall-date roll (daily)
 #   WEATHER: the top-left slot — the live fetch may land right after launch
-VISUAL_MASK_CLOCK = 12,49 187,112
+VISUAL_MASK_CLOCK = 12,49 187,114
 VISUAL_MASK_DATE = 10,144 189,175
 VISUAL_MASK_WEATHER = 10,10 98,41
 VISUAL_MASK_ARGS = -fill black -draw "rectangle $(VISUAL_MASK_CLOCK)" \

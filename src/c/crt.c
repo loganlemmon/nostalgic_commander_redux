@@ -32,23 +32,26 @@ int crt_warp_inset(int y, int h) {
 }
 
 // Horizontal CA rung from the squared Q8 radius (units: xq + yq from
-// crt_ca_shift). Zone boundaries squared once:
+// crt_ca_shift3), returning per-channel displacement in THIRDS of a pixel:
+// 0 / 3 / 6 = 0 / 1 / 2 px. Thirds because the pass now samples channels
+// fractionally (two weighted taps) instead of copying whole neighbours —
+// see stage 1 in crt_apply_framebuffer. Zone boundaries squared once:
 //   rq ≥ R ⇔ xq+yq ≥ ceil(R²/256) — so no per-pixel sqrt is needed.
-static int crt_ca_shift_h2(int xy_sum) {
-  return xy_sum < CRT_CA_R2_X2Q8 ? 0 : (xy_sum < CRT_CA_R3_X2Q8 ? 1 : 2);
+static int crt_ca_t3_h2(int xy_sum) {
+  return xy_sum < CRT_CA_R2_X2Q8 ? 0 : (xy_sum < CRT_CA_R3_X2Q8 ? 3 : 6);
 }
 // Vertical wider zones, 1px max, same formulation.
 static int crt_ca_shift_v2(int xy_sum) {
   return xy_sum < CRT_CA_R2V_X2Q8 ? 0 : 1;
 }
 
-int crt_ca_shift(int x, int y, int w, int h) {
+int crt_ca_shift3(int x, int y, int w, int h) {
   int dx = 2 * x - (w - 1);
   int dy = 2 * y - (h - 1);
   // Elliptical radius from the centre, Q8: corner ≈ 362, mid-edge = 256.
   int xq = (dx * dx * 256) / ((w - 1) * (w - 1));
   int yq = (dy * dy * 256) / ((h - 1) * (h - 1));
-  return crt_ca_shift_h2(xq + yq);
+  return crt_ca_t3_h2(xq + yq);
 }
 
 // Distance toward the nearest frame edge, counting around the corner arcs:
@@ -151,10 +154,19 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
         memcpy(s_vraw_ring[y_next % 3], fb + (size_t)y_next * w, w);
       }
 
-      // 1) CA from raw sources: horizontal fringe samples the row, vertical
+      // 1) CA from raw sources: horizontal fringe takes a two-tap weighted
+      //    sample per shifted channel (thirds-of-a-px pull); vertical
       //    fringe samples ring rows toward/away from the centreline.
       for (int x = 0; x < w; x++) {
-        int s_h = crt_ca_shift_h2(s_ca_xq[x] + yterm) + ca_boost;
+        // Horizontal pull in THIRDS: the rung (0/3/6) minus one third to
+        // cancel the RGB stripe's built-in element offset (R sits 1/3px
+        // left of the pixel centre, B 1/3px right — G at the centre stays
+        // untapped), plus the strike boost in whole pixels. The −1 makes
+        // the dead zone actually converge: at the centre the red and blue
+        // rasters land on the content, not a 2/3px apart.
+        int q = crt_ca_t3_h2(s_ca_xq[x] + yterm) - 1 + 3 * ca_boost;
+        int j = (q - (q < 0 ? 2 : 0)) / 3;  // floor(q/3); q >= -1 by construction
+        int f = q - 3 * j;                  // 0..2 (2 for every current rung: q ≡ -1 mod 3)
         int s_v = crt_ca_shift_v2(s_ca_xq[x] + yterm);
 
         bool left = x * 2 < w - 1;
@@ -163,14 +175,23 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
         // from below. Mirrors across both centrelines. Forward reads (below on
         // the top half, above on the bottom half) rely on the ring capture
         // being one row ahead in traversal direction.
-        int rx = left ? x + s_h : x - s_h;
-        int bx = left ? x - s_h : x + s_h;
+        int rt0 = left ? x + j : x - j;
+        int rt1 = left ? x + j + 1 : x - j - 1;
+        int bt0 = left ? x - j : x + j;
+        int bt1 = left ? x - j - 1 : x + j + 1;
         int ry = top ? y + s_v : y - s_v;
         int by = top ? y - s_v : y + s_v;
-        if (rx < 0) rx = 0;
-        if (rx >= w) rx = w - 1;
-        if (bx < 0) bx = 0;
-        if (bx >= w) bx = w - 1;
+        // Both taps of a channel come from the same (valid) ring ROW; clamp
+        // the COLUMNS — at max strike (j=4) they land on the same edge
+        // column and the weighted sample degenerates to a plain copy.
+        if (rt0 < 0) rt0 = 0;
+        if (rt0 >= w) rt0 = w - 1;
+        if (rt1 < 0) rt1 = 0;
+        if (rt1 >= w) rt1 = w - 1;
+        if (bt0 < 0) bt0 = 0;
+        if (bt0 >= w) bt0 = w - 1;
+        if (bt1 < 0) bt1 = 0;
+        if (bt1 >= w) bt1 = w - 1;
         // The ring holds rows y-2..y+2 at most; s_v stays within 1 today.
         // Both halves only read rows already captured into the ring.
         if (ry < 0) ry = 0;
@@ -178,8 +199,16 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
         if (by < 0) by = 0;
         if (by >= h) by = h - 1;
 
-        row_ca[x] = GCOLOR8_ALPHA | (s_vraw_ring[ry % 3][rx] & 0x30) | (row[x] & 0x0C) |
-                    (s_vraw_ring[by % 3][bx] & 0x03);
+        const uint8_t* rrow = s_vraw_ring[ry % 3];
+        const uint8_t* brow = s_vraw_ring[by % 3];
+        // Fractional channel sample: ((3-f)*near + f*far)/3. A 0↔3 edge
+        // yields exactly 2 and 1 — a real centroid shift with no duplicated
+        // ghost and no spatial pattern. Truncating divide: code values are
+        // linear in light here (the panel makes levels by area fill), so no
+        // gamma round trip.
+        int r = ((3 - f) * ((rrow[rt0] >> 4) & 3) + f * ((rrow[rt1] >> 4) & 3)) / 3;
+        int b = ((3 - f) * (brow[bt0] & 3) + f * (brow[bt1] & 3)) / 3;
+        row_ca[x] = GCOLOR8_ALPHA | (uint8_t)(r << 4) | (row[x] & 0x0C) | (uint8_t)b;
       }
 
       // 2) Vignette + dither on the CA'd row — dimming in content space, so

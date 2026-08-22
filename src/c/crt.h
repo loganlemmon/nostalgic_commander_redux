@@ -23,8 +23,11 @@ extern Layer* s_crt_layer;
 #define CRT_CORNER_RADIUS 14
 #define CRT_WARP_MAX_PX 5
 // CA zones by elliptical radius (Q8 of r²-summated terms; mid-edges ≈ 256,
-// corner ≈ 362). r < R2: clean; R2..R3: 1px; beyond R3: 2px channel split.
-// Vertical uses one threshold (R2V) with a 1px cap.
+// corner ≈ 362). r < R2: clean; R2..R3: 1px; beyond R3: 2px per channel —
+// expressed in thirds (0/3/6) because stage 1 samples fractionally, and a
+// constant −1 third in the pass cancels the panel's built-in element offset
+// so the centre of the screen converges instead of carrying a 2/3px floor.
+// Vertical uses one threshold (R2V) with a 1px cap, whole pixels still.
 #define CRT_CA_R2_Q8 170
 #define CRT_CA_R3_Q8 280
 #define CRT_CA_R2V_Q8 170
@@ -52,9 +55,9 @@ int crt_strike_offset(int y, int flash_phase);
 // Horizontal source inset at row y: 0 at the middle row, growing to
 // CRT_WARP_MAX_PX at the top/bottom rows (the screen "bends away").
 int crt_warp_inset(int y, int h);
-// CA channel-sample offset in px at (x,y): 0 inside the dead zone, 1 or 2
-// toward the edge — see crt.h's CRT_CA_R*_Q8 zone map.
-int crt_ca_shift(int x, int y, int w, int h);
+// CA per-channel displacement in THIRDS of a px at (x,y): 0 inside the dead
+// zone, 3 or 6 toward the edge — see crt.h's CRT_CA_R*_Q8 zone map.
+int crt_ca_shift3(int x, int y, int w, int h);
 
 // The whole pass over an 8-bit GColor8 framebuffer (0xAARRGGBB packed bytes,
 // row-major, w*h). Touch only via these: tests drive it with a mock buffer.

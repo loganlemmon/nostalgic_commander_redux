@@ -3766,14 +3766,144 @@ void test_crt_ca_should_pull_red_from_the_left(void) {
   TEST_ASSERT_EQUAL_HEX8(0, (row[21] >> 4) & 3);  // outside the bar: void
 }
 
+void test_crt_ca_zero_point_should_mirror_ghosts_about_the_line(void) {
+  // Dead-zone correction pins separation to 0: a 1px white line at the
+  // centre becomes symmetric {2,1} fringes — red ghost shifts right, blue
+  // left, G full. The old whole-pixel sampling left it untouched (2/3px of
+  // fringe nobody asked for).
+  s_settings_crt = 1;
+  s_flash_phase = CRT_FLASH_IDLE;
+  memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));
+  for (int y = 112; y <= 114; y++) mock_framebuffer[y * 200 + 60] = 0xFF;
+  crt_update_proc(NULL, s_fake_ctx);
+
+  uint8_t* row = &mock_framebuffer[113 * 200];
+  TEST_ASSERT_EQUAL_HEX8(2, (row[60] >> 4) & 3);  // R weighted at the line
+  TEST_ASSERT_EQUAL_HEX8(1, (row[61] >> 4) & 3);  // R ghost shifts right
+  TEST_ASSERT_EQUAL_HEX8(3, (row[60] >> 2) & 3);  // G untouched
+  TEST_ASSERT_EQUAL_HEX8(2, row[60] & 3);         // B weighted at the line
+  TEST_ASSERT_EQUAL_HEX8(1, row[59] & 3);         // B ghost shifts left
+  TEST_ASSERT_EQUAL_HEX8(0, (row[59] >> 4) & 3);  // no red left of the line
+  TEST_ASSERT_EQUAL_HEX8(0, row[61] & 3);         // no blue right of it
+}
+
+void test_crt_strike_should_stack_ca_boost_in_whole_pixels(void) {
+  // ca_boost is whole PIXELS added as 3*boost thirds: at phase 0 (amp 6,
+  // boost 3) a dead-zone line's red motif lands exactly 3px left — not 1/3.
+  // Reading boost as thirds would silently cut the strike's splay to a
+  // third of its amplitude; this is the pin against that.
+  s_settings_crt = 1;
+  s_flash_phase = 0;
+  memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));
+  for (int y = 112; y <= 114; y++) mock_framebuffer[y * 200 + 60] = 0xFF;
+  crt_update_proc(NULL, s_fake_ctx);
+
+  int off = crt_strike_offset(113, 0);  // stage-3 row jitter rides with it
+  uint8_t* row = &mock_framebuffer[113 * 200];
+  TEST_ASSERT_EQUAL_HEX8(2, (row[57 - off] >> 4) & 3);
+  TEST_ASSERT_EQUAL_HEX8(1, (row[58 - off] >> 4) & 3);
+  TEST_ASSERT_EQUAL_HEX8(0, (row[59 - off] >> 4) & 3);
+  TEST_ASSERT_EQUAL_HEX8(2, row[63 - off] & 3);
+  TEST_ASSERT_EQUAL_HEX8(1, row[62 - off] & 3);
+}
+
+void test_crt_strike_max_shift_should_stay_dark_away_from_the_edge(void) {
+  // With a white column at the right edge under max strike, nothing white
+  // may bleed into x ≤ 180. What this pins: interior darkness plus stage-3
+  // slide sanity (row 109 chosen because crt_strike_offset(109, 0) == 0 —
+  // no slide to confuse the window). Bounds on this row: yterm truncates
+  // to 0, so the max radius sum is 256 (mid-edge), t3 = 3, q ≤ 11, j ≤ 3.
+  // The clamp-degenerate plain copy at the rim itself is NOT pinned here —
+  // it is byte-invisible: every destination whose taps clamp sits at
+  // vignette depth ≤ 3, where the dither budget never passes the
+  // clamp-dependent levels (verified exhaustively over j/f/t/d). The clamp
+  // net is this darkness guard plus the strike-stack test's q/j arithmetic
+  // pin.
+  s_settings_crt = 1;
+  s_flash_phase = 0;
+  memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));
+  for (int y = 107; y <= 111; y++) mock_framebuffer[y * 200 + 199] = 0xFF;
+  crt_update_proc(NULL, s_fake_ctx);
+
+  uint8_t* row = &mock_framebuffer[109 * 200];
+  for (int x = 0; x <= 180; x++) {
+    TEST_ASSERT_EQUAL_HEX8(0xC0, row[x]);
+  }
+}
+
+void test_crt_ca_should_never_split_a_feature_into_two_ghosts(void) {
+  // The regression test against reintroducing shift DITHERING along x: with
+  // weighted taps a 1px feature appears exactly once per channel — one
+  // contiguous run of nonzero R and one of nonzero B, ≤3px wide. Dithering
+  // the shift by column would double a ghost at full level 2px away.
+  // Row 20 (5px-tall line, ring covers s_v=1) spans all three rungs as the
+  // line column sweeps 20..179; vignette is full there (depth 20).
+  s_settings_crt = 1;
+  s_flash_phase = CRT_FLASH_IDLE;
+  for (int c = 20; c <= 179; c++) {
+    memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));
+    for (int y = 18; y <= 22; y++) mock_framebuffer[y * 200 + c] = 0xFF;
+    crt_update_proc(NULL, s_fake_ctx);
+
+    uint8_t* row = &mock_framebuffer[20 * 200];
+    for (int ch = 0; ch < 2; ch++) {  // 0 = R, 1 = B
+      int runs = 0;
+      int run_start = -1, run_end = -1;
+      bool in = false;
+      for (int x = 10; x <= 189; x++) {
+        int v = ch == 0 ? (row[x] >> 4) & 3 : row[x] & 3;
+        bool lit = v > 0;
+        if (lit && !in) {
+          runs++;
+          run_start = x;
+          in = true;
+        }
+        if (!lit && in) {
+          run_end = x - 1;
+          in = false;
+        }
+      }
+      if (in) run_end = 189;
+      TEST_ASSERT_TRUE_MESSAGE(runs == 1, "channel ghost split into two edges");
+      TEST_ASSERT_TRUE_MESSAGE(run_end - run_start + 1 <= 3, "ghost too wide");
+      TEST_ASSERT_TRUE_MESSAGE(abs(run_start + run_end - 2 * c) <= 12,
+                               "ghost drifted from the feature");
+    }
+  }
+}
+
 void test_crt_ca_onset_should_cut_at_the_dead_zone(void) {
-  // Centre never fringes; the corners fringe the full 2px.
-  TEST_ASSERT_EQUAL_INT(0, crt_ca_shift(100, 113, 200, 228));
-  TEST_ASSERT_EQUAL_INT(2, crt_ca_shift(0, 0, 200, 228));
-  TEST_ASSERT_EQUAL_INT(2, crt_ca_shift(199, 227, 200, 228));
-  // Mid-edge cells land in the middle band, monotone from the centre out.
-  TEST_ASSERT_EQUAL_INT(1, crt_ca_shift(0, 113, 200, 228));
-  TEST_ASSERT_TRUE(crt_ca_shift(190, 113, 200, 228) >= crt_ca_shift(160, 113, 200, 228));
+  // Centre never fringes (separation 0, not the old 2/3px floor); corners
+  // split the full 4px (6 thirds per channel).
+  TEST_ASSERT_EQUAL_INT(0, crt_ca_shift3(100, 113, 200, 228));
+  TEST_ASSERT_EQUAL_INT(6, crt_ca_shift3(0, 0, 200, 228));
+  TEST_ASSERT_EQUAL_INT(6, crt_ca_shift3(199, 227, 200, 228));
+  // Mid-edge cells land in the middle band (1px = 3 thirds), monotone out.
+  TEST_ASSERT_EQUAL_INT(3, crt_ca_shift3(0, 113, 200, 228));
+  TEST_ASSERT_TRUE(crt_ca_shift3(190, 113, 200, 228) >= crt_ca_shift3(160, 113, 200, 228));
+}
+
+void test_crt_ca_ladder_should_be_monotone_and_mirror_symmetric(void) {
+  // Thirds ladder: displacement grows with radius and mirrors cleanly about
+  // both centrelines (the pass derives left/right and top/bottom pull signs
+  // from the half, so any asymmetry here doubles at the seam).
+  for (int y = 0; y < 228; y++) {
+    int prev = crt_ca_shift3(0, y, 200, 228);
+    for (int x = 0; x < 200; x++) {
+      int s = crt_ca_shift3(x, y, 200, 228);
+      TEST_ASSERT_TRUE(s == 0 || s == 3 || s == 6);
+      TEST_ASSERT_EQUAL_INT(s, crt_ca_shift3(199 - x, y, 200, 228));
+      TEST_ASSERT_EQUAL_INT(s, crt_ca_shift3(x, 227 - y, 200, 228));
+      if (x <= 100) {
+        TEST_ASSERT_TRUE(s <= prev || !"monotone toward the rim");
+        prev = s;
+      } else {
+        TEST_ASSERT_TRUE(s >= prev);
+        prev = s;
+      }
+    }
+    prev = prev;  // (no-op; keeps prev live across the row)
+  }
 }
 
 void test_crt_warp_should_pull_the_top_row_inward(void) {
@@ -3801,11 +3931,12 @@ void test_crt_pure_geometry_should_match_the_spec(void) {
   TEST_ASSERT_EQUAL_INT(CRT_WARP_MAX_PX, crt_warp_inset(227, 228));
   TEST_ASSERT_EQUAL_INT(0, crt_warp_inset(113, 228));
 
-  // CA: zero at the centre, 2px at the corners, monotone along x.
-  TEST_ASSERT_EQUAL_INT(0, crt_ca_shift(100, 113, 200, 228));
-  TEST_ASSERT_EQUAL_INT(2, crt_ca_shift(0, 0, 200, 228));
-  TEST_ASSERT_EQUAL_INT(2, crt_ca_shift(199, 227, 200, 228));
-  TEST_ASSERT_TRUE(crt_ca_shift(190, 113, 200, 228) >= crt_ca_shift(160, 113, 200, 228));
+  // CA: zero at the centre, 6 thirds (2px per channel) at the corners,
+  // monotone along x.
+  TEST_ASSERT_EQUAL_INT(0, crt_ca_shift3(100, 113, 200, 228));
+  TEST_ASSERT_EQUAL_INT(6, crt_ca_shift3(0, 0, 200, 228));
+  TEST_ASSERT_EQUAL_INT(6, crt_ca_shift3(199, 227, 200, 228));
+  TEST_ASSERT_TRUE(crt_ca_shift3(190, 113, 200, 228) >= crt_ca_shift3(160, 113, 200, 228));
 
   // Vignette: black boundary, full brightness outside the depth, rising
   // inward — smoothstep midpoint (x=6 of 12) sits below the half-way mark.
@@ -4155,7 +4286,12 @@ int main(void) {
   RUN_TEST(test_crt_should_round_the_corners_and_keep_the_centre);
   RUN_TEST(test_crt_vignette_should_dither_the_falloff);
   RUN_TEST(test_crt_ca_should_pull_red_from_the_left);
+  RUN_TEST(test_crt_ca_zero_point_should_mirror_ghosts_about_the_line);
+  RUN_TEST(test_crt_strike_should_stack_ca_boost_in_whole_pixels);
+  RUN_TEST(test_crt_strike_max_shift_should_stay_dark_away_from_the_edge);
+  RUN_TEST(test_crt_ca_should_never_split_a_feature_into_two_ghosts);
   RUN_TEST(test_crt_ca_onset_should_cut_at_the_dead_zone);
+  RUN_TEST(test_crt_ca_ladder_should_be_monotone_and_mirror_symmetric);
   RUN_TEST(test_crt_warp_should_pull_the_top_row_inward);
   RUN_TEST(test_crt_pure_geometry_should_match_the_spec);
   RUN_TEST(test_crt_strike_should_jitter_rows_and_decay);
