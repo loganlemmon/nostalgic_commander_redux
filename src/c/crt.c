@@ -59,14 +59,12 @@ int crt_warp_sx(int x, int y, int w, int h) {
 
 // Horizontal CA rung from the squared Q8 radius (units: xq + yq from
 // crt_ca_shift3), returning per-channel displacement in THIRDS of a pixel:
-// 2 / 4 / 8 = 2/3 / 1+1/3 / 2+2/3 px. Thirds because the pass now samples
+// 0 / 4 / 8 = 0 / 1+1/3 / 2+2/3 px. Thirds because the pass now samples
 // channels fractionally (two weighted taps) instead of copying whole
-// neighbours — see stage 1 in crt_apply_framebuffer. The dead zone gets 2/3px
-// of base misconvergence (hardware A/B: zero read flat-eyed on the big
-// digits). Zone boundaries squared once:
-//   rq ≥ R ⇔ xq+yq ≥ ceil(R²/256) — so no per-pixel sqrt is needed.
+// neighbours — see stage 1 in crt_apply_framebuffer. Zone boundaries squared
+// once: rq ≥ R ⇔ xq+yq ≥ ceil(R²/256) — so no per-pixel sqrt is needed.
 static int crt_ca_t3_h2(int xy_sum) {
-  return xy_sum < CRT_CA_R2_X2Q8 ? 2 : (xy_sum < CRT_CA_R3_X2Q8 ? 4 : 8);
+  return xy_sum < CRT_CA_R2_X2Q8 ? 0 : (xy_sum < CRT_CA_R3_X2Q8 ? 4 : 8);
 }
 // Vertical wider zones, 1px max, same formulation.
 static int crt_ca_shift_v2(int xy_sum) {

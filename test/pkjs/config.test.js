@@ -23,7 +23,7 @@ test('config has the heading, two sections, and submit in order', () => {
   assert.equal(config[1].type, 'section');
   assert.equal(config[2].type, 'section');
   assert.equal(config[3].type, 'submit');
-  assert.equal(config[1].items.length, 9);  // eight settings + battery-saver text
+  assert.equal(config[1].items.length, 8);  // eight settings
   assert.equal(config[2].items.length, 7);  // heading + six slot selects
 });
 

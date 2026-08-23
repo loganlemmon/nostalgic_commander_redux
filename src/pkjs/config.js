@@ -80,7 +80,7 @@ module.exports = [
                      ['1', 'Turbo Vision (light grey)'], ['2', 'Norton (EGA blue)'],
                      ['3', 'Dark (black)'], ['4', 'Navigator (dark grey)']
                    ])),
-            select('SETTINGS_CRT', 'CRT effect', '1', labeledOptions([['1', 'On'], ['0', 'Off']])),
+            select('SETTINGS_CRT', 'CRT effect', '0', labeledOptions([['1', 'On'], ['0', 'Off']])),
             select(
                 'SETTINGS_CRT_SOUND', 'CRT degauss sound', '0',
                 labeledOptions([['1', 'On'], ['0', 'Off']])),
@@ -102,10 +102,6 @@ module.exports = [
                      ['0', 'Before date (THU 1970-12-31)'], ['1', 'After date (1970-12-31 THU)'],
                      ['2', 'Hidden (1970-12-31)']
                    ])),
-            {
-              type : 'text',
-              defaultValue : 'If disconnects are frequent, your phone is killing the Pebble app in the background - which also breaks notifications and weather. On Android, exclude the app from battery optimization.',
-            },
           ],
   },
   {
