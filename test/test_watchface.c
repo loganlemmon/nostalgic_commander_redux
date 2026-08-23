@@ -3829,27 +3829,26 @@ void test_crt_vignette_should_dither_the_falloff(void) {
 void test_crt_ca_should_pull_red_from_the_left(void) {
   s_settings_crt = 1;
   memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));  // opaque black
-  // A red bar at cols 23..30 on row 110, left half. Under the radial warp
-  // (crt_warp_sx(24,109) = 22 there — ~3% side magnification at that
-  // radius), dest(24,109) displays CA col 22, which samples (23,110) — the
-  // fringe lands one row UP, shifted two dest cols right by the warp.
-  for (int x = 23; x <= 30; x++) mock_framebuffer[110 * 200 + x] = 0xF0;
+  // R pulls from the inward side on the left half, one row down when s_v=1.
+  // Fixture at (24,20): sum = xq 147 + yterm 173 = 320 ≥ R2V (306) so the
+  // vertical tap stays active, t3=4 → j=1 → plain copy from x+1. Warp at
+  // row 20 shows CA col 24 on dest 28 (crt_warp_sx). Bar: cols 25..32,
+  // row 21 — dest(28,20)'s red comes from the bar, G from its empty own row.
+  for (int x = 25; x <= 32; x++) mock_framebuffer[21 * 200 + x] = 0xF0;
   crt_update_proc(NULL, s_fake_ctx);
 
-  uint8_t* row = &mock_framebuffer[109 * 200];
-  TEST_ASSERT_TRUE(((row[24] >> 4) & 3) >= 2);    // pulled in from below-right
-  TEST_ASSERT_EQUAL_HEX8(0, (row[24] >> 2) & 3);  // G read from own (empty) row
-  TEST_ASSERT_EQUAL_HEX8(0, (row[23] >> 4) & 3);  // outside the bar: void
+  uint8_t* row = &mock_framebuffer[20 * 200];
+  TEST_ASSERT_EQUAL_HEX8(3, (row[28] >> 4) & 3);  // pulled in from below-right
+  TEST_ASSERT_EQUAL_HEX8(0, (row[28] >> 2) & 3);  // G read from own (empty) row
+  TEST_ASSERT_EQUAL_HEX8(0, (row[27] >> 4) & 3);  // outside the bar: void
 }
 
-void test_crt_ca_zero_point_should_mirror_ghosts_about_the_line(void) {
-  // Dead-zone correction pins the fringe to 0 separation: a 1px white line
-  // under a dead zone converges on BOTH halves. The R element sits 1/3px
-  // left of its pixel centre on both halves alike (RGB stripe), so the
-  // correction sign follows the half, not the pull direction — folding -1/3
-  // into q and then mirroring the taps (old form) left the right half a
-  // 2/3px residual splay, measured on hardware. Pin discriminator: buggy
-  // code lights R one column left of the line on the right half.
+void test_crt_ca_centre_floor_should_mirror_ghosts_about_the_line(void) {
+  // The dead zone carries a deliberate 2/3px-per-channel base misconvergence
+  // (4/3px R↔B): D6 centroid R=−4, G=0, B=+4 sixths on the left half, mirrored
+  // on the right. The per-half correction sign is still pinned the same way:
+  // folding −1/3 into q and mirroring the taps (old buggy form) flips the
+  // right-half signs (would read −2 instead of +2).
   s_settings_crt = 1;
   s_flash_phase = CRT_FLASH_IDLE;
 
@@ -3862,9 +3861,7 @@ void test_crt_ca_zero_point_should_mirror_ghosts_about_the_line(void) {
 
     uint8_t* row = &mock_framebuffer[113 * 200];
     // Channel raster displacement vs the content position, in sixths of a
-    // px: elements sit at (6x+1)/6 (R), (6x+3)/6 (G), (6x+5)/6 (B); the
-    // line's content position is c+1/2 = (6c+3)/6. Converged -> 0 on both
-    // halves; the bug scored -4/+4 on the right half, 0 on the left.
+    // px: elements sit at (6x+1)/6 (R), (6x+3)/6 (G), (6x+5)/6 (B).
     for (int ch = 0; ch < 3; ch++) {
       int num = 0, den = 0;
       for (int x = c - 3; x <= c + 3; x++) {
@@ -3873,28 +3870,26 @@ void test_crt_ca_zero_point_should_mirror_ghosts_about_the_line(void) {
         den += l;
       }
       TEST_ASSERT_TRUE(den > 0);
-      TEST_ASSERT_INT_WITHIN(1, 0, num / den - (6 * c + 3));
+      int expected = ch == 1 ? 0 : ((ch == 0) == !half ? -4 : 4);
+      TEST_ASSERT_INT_WITHIN(1, expected, num / den - (6 * c + 3));
     }
 
     if (!half) {
-      // Left half, f=2 — exact under rounding (old bit-identical path).
-      TEST_ASSERT_EQUAL_HEX8(2, (row[90] >> 4) & 3);  // R weighted at the line
-      TEST_ASSERT_EQUAL_HEX8(1, (row[91] >> 4) & 3);  // R ghost toward the edge
-      TEST_ASSERT_EQUAL_HEX8(3, (row[90] >> 2) & 3);  // G untouched
-      TEST_ASSERT_EQUAL_HEX8(2, row[90] & 3);         // B weighted at the line
-      TEST_ASSERT_EQUAL_HEX8(1, row[89] & 3);         // B ghost toward the edge
-      TEST_ASSERT_EQUAL_HEX8(0, (row[89] >> 4) & 3);  // no red past it
-      TEST_ASSERT_EQUAL_HEX8(0, row[91] & 3);         // no blue past it
+      // Left half: q=1 → f=1 — soft 2/1 ghosts ({c:2, c−1:1} R, mirrored B);
+      // the fringe is byte-visible but dim.
+      TEST_ASSERT_EQUAL_HEX8(2, (row[90] >> 4) & 3);
+      TEST_ASSERT_EQUAL_HEX8(1, (row[89] >> 4) & 3);
+      TEST_ASSERT_EQUAL_HEX8(2, row[90] & 3);
+      TEST_ASSERT_EQUAL_HEX8(1, row[91] & 3);
+      TEST_ASSERT_EQUAL_HEX8(3, (row[90] >> 2) & 3);  // G stays
     } else {
-      // Right half, f=1: red pulls left 1/3px -> same {c:2, c+1:1} shape;
-      // blue keeps its edge-side ghost at c-1.
-      TEST_ASSERT_EQUAL_HEX8(2, (row[109] >> 4) & 3);
-      TEST_ASSERT_EQUAL_HEX8(1, (row[110] >> 4) & 3);
-      TEST_ASSERT_EQUAL_HEX8(3, (row[109] >> 2) & 3);
-      TEST_ASSERT_EQUAL_HEX8(2, row[109] & 3);
-      TEST_ASSERT_EQUAL_HEX8(1, row[108] & 3);
-      TEST_ASSERT_EQUAL_HEX8(0, (row[108] >> 4) & 3);  // THE +2/3px discriminator
-      TEST_ASSERT_EQUAL_HEX8(0, row[110] & 3);
+      // Right half: q=3 → j=1, f=0 — full-strength plain-copy echoes one
+      // column outward (R shows at the adjacent column, none on the line).
+      TEST_ASSERT_EQUAL_HEX8(3, (row[110] >> 4) & 3);
+      TEST_ASSERT_EQUAL_HEX8(0, (row[109] >> 4) & 3);
+      TEST_ASSERT_EQUAL_HEX8(3, row[108] & 3);
+      TEST_ASSERT_EQUAL_HEX8(0, row[109] & 3);
+      TEST_ASSERT_EQUAL_HEX8(3, (row[109] >> 2) & 3);  // G stays
     }
   }
 }
@@ -4030,9 +4025,9 @@ void test_crt_ca_boundary_row_should_not_read_across_halves(void) {
 }
 
 void test_crt_ca_onset_should_cut_at_the_dead_zone(void) {
-  // Centre never fringes (separation 0, not the old 2/3px floor); corners
-  // split the full 4px (6 thirds per channel).
-  TEST_ASSERT_EQUAL_INT(0, crt_ca_shift3(100, 113, 200, 228));
+  // Centre carries the deliberate 2/3px base misconvergence (per channel);
+  // corners split the full 2+2/3px (8 thirds per channel).
+  TEST_ASSERT_EQUAL_INT(2, crt_ca_shift3(100, 113, 200, 228));
   TEST_ASSERT_EQUAL_INT(8, crt_ca_shift3(0, 0, 200, 228));
   TEST_ASSERT_EQUAL_INT(8, crt_ca_shift3(199, 227, 200, 228));
   // Mid-edge cells land in the middle band (1+1/3 px = 4 thirds), monotone out.
@@ -4048,7 +4043,7 @@ void test_crt_ca_ladder_should_be_monotone_and_mirror_symmetric(void) {
     int prev = crt_ca_shift3(0, y, 200, 228);
     for (int x = 0; x < 200; x++) {
       int s = crt_ca_shift3(x, y, 200, 228);
-      TEST_ASSERT_TRUE(s == 0 || s == 4 || s == 8);
+      TEST_ASSERT_TRUE(s == 2 || s == 4 || s == 8);
       TEST_ASSERT_EQUAL_INT(s, crt_ca_shift3(199 - x, y, 200, 228));
       TEST_ASSERT_EQUAL_INT(s, crt_ca_shift3(x, 227 - y, 200, 228));
       if (x <= 100) {
@@ -4105,9 +4100,9 @@ void test_crt_pure_geometry_should_match_the_spec(void) {
     }
   }
 
-  // CA: zero at the centre, 8 thirds (2+2/3px per channel) at the corners,
-  // monotone along x.
-  TEST_ASSERT_EQUAL_INT(0, crt_ca_shift3(100, 113, 200, 228));
+  // CA: 2/3px at the centre (base misconvergence), 8 thirds per channel at
+  // the corners, monotone along x.
+  TEST_ASSERT_EQUAL_INT(2, crt_ca_shift3(100, 113, 200, 228));
   TEST_ASSERT_EQUAL_INT(8, crt_ca_shift3(0, 0, 200, 228));
   TEST_ASSERT_EQUAL_INT(8, crt_ca_shift3(199, 227, 200, 228));
   TEST_ASSERT_TRUE(crt_ca_shift3(190, 113, 200, 228) >= crt_ca_shift3(160, 113, 200, 228));
@@ -4544,7 +4539,7 @@ int main(void) {
   RUN_TEST(test_crt_should_round_the_corners_and_keep_the_centre);
   RUN_TEST(test_crt_vignette_should_dither_the_falloff);
   RUN_TEST(test_crt_ca_should_pull_red_from_the_left);
-  RUN_TEST(test_crt_ca_zero_point_should_mirror_ghosts_about_the_line);
+  RUN_TEST(test_crt_ca_centre_floor_should_mirror_ghosts_about_the_line);
   RUN_TEST(test_crt_strike_should_stack_ca_boost_in_whole_pixels);
   RUN_TEST(test_crt_strike_max_shift_should_stay_dark_away_from_the_edge);
   RUN_TEST(test_crt_ca_should_never_split_a_feature_into_two_ghosts);

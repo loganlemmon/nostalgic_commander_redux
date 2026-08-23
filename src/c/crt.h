@@ -33,11 +33,13 @@ extern Layer* s_crt_layer;
 // (the stripe does not mirror: −1 left, +1 right) so the centre of the screen
 // converges instead of carrying a 2/3px floor.
 // Max separation 4px→5.3px: hardware A/B asked for a promoted fringe.
-// Vertical uses one threshold (R2V) with a 1px cap, whole pixels still.
+// Vertical uses one threshold (R2V) with a 1px cap, whole pixels still — set as
+// the old R3, so vertical smear lives only in the deep outer zone; slot text
+// stopped smearing vertically (complements the horizontal 325 dial).
 #define CRT_CA_R2_Q8 170
 #define CRT_CA_R3_Q8 \
   325  // sits past slot glyphs (sum ≤405): the max rung lives on frame strokes, not text
-#define CRT_CA_R2V_Q8 170
+#define CRT_CA_R2V_Q8 280
 
 // Squared thresholds for the zone compare — no per-pixel sqrt needed.
 #define CRT_CA_R2_X2Q8 ((CRT_CA_R2_Q8 * CRT_CA_R2_Q8 + 255) >> 8)
