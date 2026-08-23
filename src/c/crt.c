@@ -13,6 +13,13 @@
 // flash tick; written by crt_backlight_handler on backlight-on.
 static int s_flash_phase = CRT_FLASH_IDLE;
 static AppTimer* s_flash_timer = NULL;  // latest tick arm — cancelled on retrigger
+// Strike primed by the backlight handler, started by the overlay proc AFTER
+// the wake frame lands: measured on hardware, the wake burst (bg fill, canvas
+// glyphs, clock, pass) blocks long enough to drain the audio ring once — the
+// audible pop-gap-hum. Delaying sound+chain past that frame keeps the ring fed.
+static bool s_strike_pending = false;
+
+static void crt_flash_tick(void* data);
 
 static int isqrt_floor(int v) {
   if (v <= 0) return 0;
@@ -317,6 +324,15 @@ void crt_update_proc(Layer* layer, GContext* ctx) {
   GRect bounds = gbitmap_get_bounds(fb);
   crt_apply_framebuffer(gbitmap_get_data(fb), bounds.size.w, bounds.size.h, s_flash_phase);
   graphics_release_frame_buffer(ctx, fb);
+  // Strike trigger lives at the END of the wake frame (not the backlight
+  // handler): the sound starts once the ring can survive what follows.
+  if (s_strike_pending) {
+    s_strike_pending = false;
+    crt_play_strike_sound();
+    s_flash_phase = 0;
+    if (s_crt_layer) layer_mark_dirty(s_crt_layer);
+    s_flash_timer = app_timer_register(CRT_FLASH_TICK_MS, crt_flash_tick, NULL);
+  }
 }
 
 static void crt_flash_tick(void* data) {
@@ -337,16 +353,15 @@ void crt_backlight_handler(bool on) {
   // Backlight-only gating: the flash is the strike of a tube warming up;
   // backlight-off transitions and a disabled effect start nothing.
   if (!on || !s_settings_crt) return;
-  s_flash_phase = 0;
-  // A second backlight-on mid-strike would fork a second tick chain; kill the
-  // previous arm and restart the phase clean.
+  // Prime, don't strike: the overlay proc starts sound + chain after the wake
+  // frame. A mid-strike backlight-on cancels the old chain and re-primes.
   if (s_flash_timer) {
     app_timer_cancel(s_flash_timer);
     s_flash_timer = NULL;
   }
-  crt_play_strike_sound();
+  s_flash_phase = CRT_FLASH_IDLE;
+  s_strike_pending = true;
   if (s_crt_layer) layer_mark_dirty(s_crt_layer);
-  s_flash_timer = app_timer_register(CRT_FLASH_TICK_MS, crt_flash_tick, NULL);
 }
 
 // The degauss woomp as synthesized PCM: note-table playback clicks at every
@@ -354,7 +369,8 @@ void crt_backlight_handler(bool on) {
 // a pitch-gliding sine (≈90 → 55 Hz) under a swell-and-decay amplitude
 // envelope. Continuous by construction. 320ms at 16 kHz 16-bit sits well
 // under SPEAKER_MAX_SAMPLE_BYTES_TOTAL. Synthesized once on first use.
-#define CRT_STRIKE_PCM_MS 320
+#define CRT_STRIKE_PCM_MS \
+  110  // <= stock FW's 128ms ring: the sound is a thunk, frames can't starve it
 #define CRT_STRIKE_PCM_RATE 16000
 #define CRT_STRIKE_PCM_SAMPLES (CRT_STRIKE_PCM_MS * CRT_STRIKE_PCM_RATE / 1000)
 static int16_t s_strike_pcm[CRT_STRIKE_PCM_SAMPLES];
@@ -378,31 +394,30 @@ static int16_t crt_wave_q15(uint32_t phase_q16) {
 }
 
 void crt_strike_synth(int16_t* buf, size_t n) {
-  // Phase accumulator, Q16 per sample; glide 90 → 55 Hz; envelope: rise
-  // 0-20%, hold to 40%, linear decay reaching silence 64 samples before the
-  // end (the trailing zeros keep the codec from cutting mid-cycle).
-  // Voice: 4/7 fundamental, 2/7 second, 1/7 third harmonic — the watch
-  // speaker barely reproduces the sub-100Hz fundamental, so the audible
-  // weight rides the harmonics. All integer.
+  // Thunk, not hum. Stock firmware's audio ring holds 128ms and every render
+  // frame blocks the loop ~60ms (measured 2026-08-23; the refill callback is
+  // droppable under KernelMain load), so the strike sound must fit inside one
+  // ring: 110ms. It also wants the band the speaker reproduces — the old
+  // 90→55Hz hum put 100% of its energy under 300Hz, mostly inaudible. The
+  // coil's energisation IS the perceptible event: constant 190 Hz + partials
+  // 380/570/760 at 4:3:2:1, ~5.5ms attack, exponential decay (thermistor
+  // shape), last 64 samples silent so the codec never cuts mid-cycle.
+  const size_t attack = n / 20;
   uint32_t phase = 0;
+  int env = 32767;  // Q15, thermistor decay: env -= env>>10 per sample
   for (size_t i = 0; i < n; i++) {
-    int f_q8 = 90 * 256 - (int)((35 * 256 * i) / n);  // Hz, fixed point
-    phase += (uint32_t)((f_q8 * 65536) / (256 * CRT_STRIKE_PCM_RATE));
-    int env;
-    if (i < n / 5) {
-      env = (int)((i * 256) / (n / 5));  // rise
-    } else if (i < 2 * n / 5) {
-      env = 256;  // hold
-    } else if (i < n - 64) {
-      env = 256 - (int)(((i - 2 * n / 5) * 256) / (n - 64 - 2 * n / 5));  // decay
-      if (env < 0) env = 0;
-    } else {
-      env = 0;  // trailing silence
-    }
-    int y = (4 * crt_wave_q15(phase) + 2 * crt_wave_q15(phase * 2) + crt_wave_q15(phase * 3)) / 7;
-    buf[i] = (int16_t)(((int64_t)y * env * 28000) >> 23);  // 64-bit: the product is ~2³¹
+    phase += (uint32_t)((190u * 65536) / CRT_STRIKE_PCM_RATE);
+    int y = (4 * crt_wave_q15(phase) + 3 * crt_wave_q15(phase * 2) + 2 * crt_wave_q15(phase * 3) +
+             crt_wave_q15(phase * 4)) /
+            10;
+    int gain = i < attack ? (int)(i * 256 / attack) : 256;
+    if (i + 64 >= n) gain = 0;
+    buf[i] = (int16_t)(((int64_t)y * gain * env * 30000) >> 38);
+    if (env && gain && i >= attack) env -= env >> 10;
   }
 }
+
+#define CRT_STRIKE_VOLUME 90
 
 void crt_play_strike_sound(void) {
   // speaker_is_muted covers the system mute preference (including Quiet
@@ -412,6 +427,12 @@ void crt_play_strike_sound(void) {
     crt_strike_synth(s_strike_pcm, CRT_STRIKE_PCM_SAMPLES);
     s_strike_pcm_ready = true;
   }
+  // Audio underrun notes (hardware-measured 2026-08-23): the driver ring is
+  // 128ms and each strike frame blocks the main loop ~95ms, so refill
+  // callbacks lose the race and the woomp gaps. The stream API that would
+  // let the app top the ring itself only exists from FW 4.33.2 — older stock
+  // firmware HARD-FAULTS on the missing syscall (fallback-by-return-false is
+  // impossible), so the old track path stays until those builds die out.
   // One unshifted note over the whole sample plays it raw: the PCM IS the
   // sound.
   static const SpeakerNote through[1] = {
@@ -423,7 +444,7 @@ void crt_play_strike_sound(void) {
                                        .base_midi_note = 60,
                                        .loop = false};
   const SpeakerTrack track = {.notes = through, .num_notes = 1, .sample = &sample};
-  speaker_play_tracks(&track, 1, 85);
+  speaker_play_tracks(&track, 1, CRT_STRIKE_VOLUME);
 }
 
 void crt_apply_setting_change(void) {
@@ -432,6 +453,7 @@ void crt_apply_setting_change(void) {
     return;
   }
   s_flash_phase = CRT_FLASH_IDLE;
+  s_strike_pending = false;  // a primed-but-unstarted strike dies with the toggle
   // Mid-strike toggle-off: kill the armed chain, or the next tick re-arms
   // from IDLE into a full strike nobody asked for.
   if (s_flash_timer) {

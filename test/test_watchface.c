@@ -82,8 +82,12 @@ static void reset_all_state(void) {
   s_fmt_short = -1;
 
   s_shown_time[0] = '\0';
+  s_scene_cache_valid = false;
+  free(s_scene_cache);
+  s_scene_cache = NULL;
   s_flash_phase = CRT_FLASH_IDLE;
   s_flash_timer = NULL;
+  s_strike_pending = false;
   s_crt_layer = NULL;
   s_canvas_layer = NULL;
   s_main_window = NULL;
@@ -220,15 +224,47 @@ void test_quick_view_did_change_should_gate_and_restore(void) {
   TEST_ASSERT_EQUAL_INT(marks + 2, mock_mark_dirty_count);
 }
 
+void test_canvas_should_blit_the_scene_cache_on_repeat_renders(void) {
+  // Mock draw fns never paint pixels, so seed the glass with real bytes and
+  // let the live draw's snapshot pick them up; the blit must restore them
+  // byte-exactly after a corrupted second state.
+  main_window_load(NULL);
+  for (size_t i = 0; i < sizeof(mock_framebuffer); i++) mock_framebuffer[i] = (uint8_t)(i * 7 + 3);
+  canvas_update_proc(NULL, NULL);  // live draw + snapshot
+  int runs_after_first = mock_text_run_count;
+  int fills_after_first = mock_fill_rect_count;
+  TEST_ASSERT_TRUE(runs_after_first > 0);
+  TEST_ASSERT_TRUE(fills_after_first > 0);
+
+  memset(mock_framebuffer, 0x5A, sizeof(mock_framebuffer));
+  canvas_update_proc(NULL, NULL);  // cache hit: blit, no drawing
+  TEST_ASSERT_EQUAL_INT(runs_after_first, mock_text_run_count);
+  TEST_ASSERT_EQUAL_INT(fills_after_first, mock_fill_rect_count);
+  for (size_t i = 0; i < sizeof(mock_framebuffer); i++) {
+    TEST_ASSERT_EQUAL_HEX8((uint8_t)(i * 7 + 3), mock_framebuffer[i]);
+  }
+
+  // A content change invalidates THROUGH the gate: request_ui_redraw()'s
+  // snapshot trip must fire canvas_invalidate_cache() — assert the wiring,
+  // not just the outcome: the flag is false right after the gate runs.
+  s_step_count = 4321;  // boot layout shows STEPS; value change trips the snapshot
+  request_ui_redraw();
+  TEST_ASSERT_FALSE(s_scene_cache_valid);
+  canvas_update_proc(NULL, NULL);
+  TEST_ASSERT_TRUE(mock_fill_rect_count > fills_after_first);
+}
+
 void test_canvas_should_skip_the_bottom_row_while_quick_view_is_up(void) {
   test_apply_theme();
   s_quick_view_active = false;
   mock_fill_rect_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   int full = mock_fill_rect_count;
 
   s_quick_view_active = true;
   mock_fill_rect_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   int occluded = mock_fill_rect_count;
 
@@ -264,6 +300,7 @@ void test_bt_qt_wide_should_draw_both_checkboxes(void) {
   s_connected = true;
   s_quiet_time_active = true;
   mock_text_run_count = 0;
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
 
   bool x_found = false, z_found = false;
@@ -284,6 +321,7 @@ void test_bt_qt_window_should_register_captions_and_boxes_on_one_strip(void) {
   s_connected = true;
   s_quiet_time_active = true;
   mock_text_run_count = 0;
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
 
   TEST_ASSERT_TRUE(text_run_at("BT", GRect(30, 0, 16, 16), s_active_theme->text_secondary));
@@ -296,6 +334,7 @@ void test_canvas_procs_should_never_word_wrap(void) {
   test_apply_theme();
   s_complication_slots[3].source = DATA_SOURCE_BATTERY_BAR;  // exercise the shade runs too
   mock_wordwrap_calls = 0;
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   TEST_ASSERT_EQUAL_INT(0, mock_wordwrap_calls);
 }
@@ -306,6 +345,7 @@ void test_hum_pcp_window_should_paint_its_halves(void) {
   s_weather_humidity = 61;
   s_weather_pcp = 12;
   mock_text_run_count = 0;
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
 
   // The tight strip: an 8-cell block (3+2+3) centred in the 93px box at
@@ -342,6 +382,7 @@ void test_hum_pcp_captions_should_centre_over_the_fields(void) {
   s_weather_humidity = 61;
   s_weather_pcp = 12;
   mock_text_run_count = 0;
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
 
   TEST_ASSERT_TRUE(text_run_at("HUM", GRect(22, 0, 24, 16), s_active_theme->text_secondary));
@@ -355,6 +396,7 @@ void test_battery_bar_should_paint_its_fill_as_one_rect(void) {
   mock_fill_rect_reset();
   mock_bar_glyph_calls = 0;
 
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
 
   // Expected fill: every bar cell, one cell high, aligned with the band.
@@ -386,6 +428,7 @@ void test_steps_bar_should_fill_with_the_plain_text_color(void) {
   s_step_count = 6000;  // 60% of the 10k goal
   mock_fill_rect_reset();
 
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
 
   bool saw_bar_fill = false;
@@ -410,6 +453,7 @@ void test_battery_bar_should_fill_with_the_status_color(void) {
   for (int c = 0; c < 3; c++) {
     s_battery_level = levels[c];
     mock_fill_rect_reset();
+    s_scene_cache_valid = false;
     canvas_update_proc(NULL, NULL);
 
     bool saw_fill = false;
@@ -434,6 +478,7 @@ void test_aqi_chip_should_band_only_on_an_attention_reading(void) {
 
   s_weather_aqi = 30;  // clean air fills nothing
   mock_fill_rect_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   for (int i = 0; i < mock_fill_rect_count; i++) {
     bool at_band = mock_fill_rects[i].origin.x == band.origin.x &&
@@ -449,6 +494,7 @@ void test_aqi_chip_should_band_only_on_an_attention_reading(void) {
 
   s_weather_aqi = 60;  // moderate: yellow band
   mock_fill_rect_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   bool saw_band = false;
   for (int i = 0; i < mock_fill_rect_count; i++) {
@@ -470,6 +516,7 @@ void test_battery_complications_should_wear_green_while_charging(void) {
   s_battery_charging = true;
 
   mock_fill_rect_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   bool saw_chip_band = false;
   for (int i = 0; i < mock_fill_rect_count; i++) {
@@ -484,6 +531,7 @@ void test_battery_complications_should_wear_green_while_charging(void) {
   s_complication_slots[3].source = DATA_SOURCE_HEART_RATE;
   s_complication_slots[5].source = DATA_SOURCE_BATTERY_BAR;
   mock_fill_rect_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   bool saw_bar_fill = false;
   for (int i = 0; i < mock_fill_rect_count; i++) {
@@ -532,22 +580,26 @@ void test_pcp_chip_should_band_on_attention_probability(void) {
 
   s_weather_pcp = 45;  // <= 50: nothing to plan around
   mock_fill_rect_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   TEST_ASSERT_FALSE(pcp_slot_banded_with(band, s_active_theme->status_yellow));
   TEST_ASSERT_FALSE(pcp_slot_banded_with(band, s_active_theme->status_red));
 
   s_weather_pcp = 60;  // 51-70: worth a thought — yellow band
   mock_fill_rect_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   TEST_ASSERT_TRUE(pcp_slot_banded_with(band, s_active_theme->status_yellow));
 
   s_weather_pcp = 75;  // past 70: plan around it — red band
   mock_fill_rect_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   TEST_ASSERT_TRUE(pcp_slot_banded_with(band, s_active_theme->status_red));
 
   s_weather_pcp = -1;  // no reading at all: quiet
   mock_fill_rect_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   TEST_ASSERT_FALSE(pcp_slot_banded_with(band, s_active_theme->status_yellow));
   TEST_ASSERT_FALSE(pcp_slot_banded_with(band, s_active_theme->status_red));
@@ -577,6 +629,7 @@ void test_weather_strip_should_draw_the_condition_in_mark(void) {
   s_weather_humidity = 55;
   s_weather_pcp = 10;
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   GRect strip = s_complication_slots[5].box_rect;
   int strip_y = strip.origin.y + VALUE_ROW_DY;
@@ -597,6 +650,7 @@ void test_heart_rate_chip_should_trail_the_heart(void) {
   // Digits, then the heart: the accent rides the tail like the units do.
   s_heart_rate = 75;
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   GRect slot = s_complication_slots[3].box_rect;
   int heart_x = -1, digits_x = -1;
@@ -617,6 +671,7 @@ void test_weather_chip_should_hotkey_the_condition_and_the_unit(void) {
   s_weather_temp = 72;
   s_weather_cond_code = 1;
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   GRect row = vga16_value_rect(s_complication_slots[0].box_rect, "CLD 72F");
   TEST_ASSERT_TRUE(row_has_run(row, "CLD", s_active_theme->mark));
@@ -627,6 +682,7 @@ void test_weather_chip_should_hotkey_the_condition_and_the_unit(void) {
   s_weather_temp = -999;
   s_weather_cond_code = -1;
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   GRect dash_row = vga16_value_rect(s_complication_slots[0].box_rect, "-- --");
   TEST_ASSERT_FALSE(row_has_run(dash_row, "--", s_active_theme->mark));
@@ -637,6 +693,7 @@ void test_sleep_chip_should_hint_only_the_trailing_unit(void) {
   // stays plain; the rail is the right edge.
   s_sleep_seconds = 7 * 3600 + 30 * 60;
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   GRect row = vga16_value_rect(s_complication_slots[1].box_rect, "7h 30m");
   TEST_ASSERT_TRUE(row_has_run(row, "m", s_active_theme->mark));
@@ -648,6 +705,7 @@ void test_steps_chip_should_hint_the_k(void) {
   s_complication_slots[1].source = DATA_SOURCE_STEPS;
   s_step_count = 12500;
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   GRect row = vga16_value_rect(s_complication_slots[1].box_rect, "12.5k");
   TEST_ASSERT_TRUE(row_has_run(row, "k", s_active_theme->mark));
@@ -661,6 +719,7 @@ void test_battery_chip_should_band_without_hinting_the_percent(void) {
   s_battery_charging = false;
   s_battery_level = 87;
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   GRect row = vga16_value_rect(s_complication_slots[3].box_rect, "87%");
   TEST_ASSERT_TRUE(row_has_run(row, "87%", s_active_theme->text_primary));
@@ -668,6 +727,7 @@ void test_battery_chip_should_band_without_hinting_the_percent(void) {
 
   s_battery_charging = true;  // on the band everything plays in ink
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   TEST_ASSERT_FALSE(row_has_run(row, "%", s_active_theme->mark));
 }
@@ -676,6 +736,7 @@ void test_humidity_chip_should_stay_plain(void) {
   s_complication_slots[3].source = DATA_SOURCE_HUMIDITY;
   s_weather_humidity = 62;
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   GRect row = vga16_value_rect(s_complication_slots[3].box_rect, "62%");
   TEST_ASSERT_TRUE(row_has_run(row, "62%", s_active_theme->text_primary));
@@ -686,6 +747,7 @@ void test_active_chip_should_hint_minutes(void) {
   s_complication_slots[3].source = DATA_SOURCE_ACTIVE_MINUTES;
   s_active_minutes = 115;
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   GRect row = vga16_value_rect(s_complication_slots[3].box_rect, "115m");
   TEST_ASSERT_TRUE(row_has_run(row, "m", s_active_theme->mark));
@@ -698,6 +760,7 @@ void test_temp_chip_should_color_shift_and_hint_the_unit(void) {
   s_settings_units = 1;
   s_weather_temp = -2;  // metric cold
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   GRect row = vga16_value_rect(s_complication_slots[3].box_rect, "-2C");
   TEST_ASSERT_TRUE(row_has_run(row, "-2", s_active_theme->accent_cold));
@@ -719,6 +782,7 @@ void test_high_low_chip_should_hint_both_units(void) {
   s_hi_hour_tmrw = 15;
   s_wall_hour = 4;  // nothing passed: "+11C +20C", LO leads
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   GRect row = vga16_value_rect(s_complication_slots[0].box_rect, "+11C +20C");
   TEST_ASSERT_TRUE(row_has_run(row, "+11", s_active_theme->text_primary));
@@ -742,6 +806,7 @@ void test_high_low_chip_should_hint_both_units(void) {
   s_temp_high_tmrw = -999;
   s_temp_low_tmrw = -999;
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   row = vga16_value_rect(s_complication_slots[0].box_rect, "-- --");
   for (int i = 0; i < mock_text_run_count; i++) {
@@ -762,6 +827,7 @@ void test_wind_chip_should_hint_the_unit_until_gale(void) {
   s_weather_wind_speed = 12;
   s_weather_wind_direction = 216;
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   bool mph_marked = false;
   for (int i = 0; i < mock_text_run_count; i++) {
@@ -774,6 +840,7 @@ void test_wind_chip_should_hint_the_unit_until_gale(void) {
 
   s_weather_wind_speed = 45;  // gale: no hint survives the band
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   mph_marked = false;
   for (int i = 0; i < mock_text_run_count; i++) {
@@ -793,6 +860,7 @@ void test_weather_strip_should_hint_quiet_units(void) {
   s_weather_humidity = 55;
   s_weather_pcp = 10;
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   GRect strip = s_complication_slots[5].box_rect;
   int strip_y = strip.origin.y + VALUE_ROW_DY;
@@ -827,6 +895,7 @@ void test_pcp_chip_should_band_by_wmo_intensity_and_keep_accent_when_calm(void) 
   s_precip_now = 30;  // 3 mm: light
   mock_fill_rect_reset();
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   TEST_ASSERT_FALSE(pcp_slot_banded_with(band, s_active_theme->status_yellow));
   TEST_ASSERT_FALSE(pcp_slot_banded_with(band, s_active_theme->status_red));
@@ -836,6 +905,7 @@ void test_pcp_chip_should_band_by_wmo_intensity_and_keep_accent_when_calm(void) 
   s_precip_now = 40;  // 4 mm: heavy — yellow band, no accent
   mock_fill_rect_reset();
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   TEST_ASSERT_TRUE(pcp_slot_banded_with(band, s_active_theme->status_yellow));
   TEST_ASSERT_FALSE(
@@ -844,6 +914,7 @@ void test_pcp_chip_should_band_by_wmo_intensity_and_keep_accent_when_calm(void) 
   s_precip_now = 80;  // 8 mm: violent — red band, no accent
   mock_fill_rect_reset();
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   TEST_ASSERT_TRUE(pcp_slot_banded_with(band, s_active_theme->status_red));
   TEST_ASSERT_FALSE(
@@ -2131,6 +2202,7 @@ void test_hi_lo_captions_should_centre_over_the_strip_halves(void) {
   s_wall_hour = 12;
   s_complication_slots[0].source = DATA_SOURCE_TEMP_HIGH_LOW;
   mock_text_run_count = 0;
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
 
   TEST_ASSERT_TRUE(text_run_at("HI", GRect(26, 0, 16, 16), s_active_theme->text_secondary));
@@ -3581,6 +3653,7 @@ void test_empty_and_unknown_sources_should_draw_nothing(void) {
   test_apply_theme();
   s_complication_slots[2].source = DATA_SOURCE_EMPTY;
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   GRect vacated = s_complication_slots[2].box_rect;
   for (int i = 0; i < mock_text_run_count; i++) {
@@ -3600,6 +3673,7 @@ void test_unknown_source_should_render_only_the_placeholder_frame(void) {
   test_apply_theme();
   s_complication_slots[2].source = (ComplicationDataSource)42;
   mock_text_runs_reset();
+  s_scene_cache_valid = false;
   canvas_update_proc(NULL, NULL);
   GRect box = s_complication_slots[2].box_rect;
   int overlapping = 0;
@@ -3836,8 +3910,8 @@ void test_crt_strike_should_stack_ca_boost_in_whole_pixels(void) {
   for (int y = 112; y <= 114; y++) mock_framebuffer[y * 200 + 60] = 0xFF;
   crt_update_proc(NULL, s_fake_ctx);
 
-  int off = crt_strike_offset(113, 0);  // stage-3 row jitter rides with it
   uint8_t* row = &mock_framebuffer[113 * 200];
+  int off = crt_strike_offset(113, 0);
   // Stage-3's warp-blend smears the {2,1} motifs into fractional tails that
   // rounding partially clips, so pin centroids instead of exact levels: the
   // whole-px boost must land each channel's energy at c∓3; a thirds-misread
@@ -3894,13 +3968,11 @@ void test_crt_ca_should_never_split_a_feature_into_two_ghosts(void) {
   s_settings_crt = 1;
   s_flash_phase = CRT_FLASH_IDLE;
   for (int c = 20; c <= 179; c++) {
-    // Skip zones where the rung changes under the motif's tap window, and the
-    // pull-direction sign seam — both are structural artifacts of zone-sampled
-    // CA that predate this sampler (a 1px feature's fringe can drop or echo
-    // symmetric about the seam there). Row 20's rung boundary sits at
-    // x ~ 27.5 / 171.4 (t3 4<->8); the seam band at this row's rung is c in
-    // 98..100 — all simulated tap-by-tap, not eyeballed.
-    if ((c >= 23 && c <= 32) || (c >= 167 && c <= 175) || (c >= 98 && c <= 100)) continue;
+    // Skip the pull-direction sign seam — a structural artifact of
+    // zone-sampled CA that predates this sampler (a 1px feature's fringes
+    // echo symmetric about the seam). The rung-8 zone sits beyond the sweep
+    // columns since CRT_CA_R3_Q8 went 280 → 325 (slot glyphs kept out of it).
+    if (c >= 98 && c <= 100) continue;
     memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));
     for (int y = 18; y <= 22; y++) mock_framebuffer[y * 200 + c] = 0xFF;
     crt_update_proc(NULL, s_fake_ctx);
@@ -4163,34 +4235,38 @@ void test_crt_sound_should_play_only_when_enabled_and_unmuted(void) {
   s_settings_crt = 1;
 
   crt_backlight_handler(true);  // sound toggle off: nothing
+  crt_update_proc(NULL, s_fake_ctx);
   TEST_ASSERT_EQUAL_INT(0, mock_speaker_play_tracks_count);
 
   s_settings_crt_sound = 1;
   mock_speaker_muted = true;  // system mute / Quiet Time wins
   crt_backlight_handler(true);
+  crt_update_proc(NULL, s_fake_ctx);
   TEST_ASSERT_EQUAL_INT(0, mock_speaker_play_tracks_count);
 
   mock_speaker_muted = false;
   crt_backlight_handler(true);
+  crt_update_proc(NULL, s_fake_ctx);
   TEST_ASSERT_EQUAL_INT(1, mock_speaker_play_tracks_count);
   TEST_ASSERT_EQUAL_UINT32(1, mock_speaker_last_num_tracks);
-  TEST_ASSERT_EQUAL_UINT8(85, mock_speaker_last_volume);
+  TEST_ASSERT_EQUAL_UINT8(CRT_STRIKE_VOLUME, mock_speaker_last_volume);
 }
 
-void test_crt_strike_pcm_should_swell_fall_and_never_click(void) {
-  // The note-table woomp cracked at every note boundary; the synthesized PCM
-  // hum gets its envelope/shape pinned instead.
+void test_crt_strike_pcm_should_thunk_fall_and_never_click(void) {
+  // Thunk shape: starts silent, attacks to full in the first n/20, decays —
+  // the strike's sound must fit the stock ring (110ms ≤ 128ms measured HW
+  // window) AND not click at boundaries.
   static int16_t buf[CRT_STRIKE_PCM_SAMPLES];
   crt_strike_synth(buf, CRT_STRIKE_PCM_SAMPLES);
 
-  // Swell in: the buffer starts at silence, and ends in a run of zeros (the
-  // end-crack guard).
+  // Silent start.
   TEST_ASSERT_INT_WITHIN(3000, 0, buf[0]);
+  // Trailing 64 samples zero — the codec must never cut mid-cycle.
   for (int i = CRT_STRIKE_PCM_SAMPLES - 64; i < CRT_STRIKE_PCM_SAMPLES; i++) {
     TEST_ASSERT_EQUAL_INT16(0, buf[i]);
   }
 
-  // ...peaks after the rise, and the tail is well below the peak.
+  // Exponential fall: per-segment peaks strictly decay.
   int peak[5] = {0};
   for (int seg = 0; seg < 5; seg++) {
     for (size_t i = (size_t)(seg) * (CRT_STRIKE_PCM_SAMPLES / 5);
@@ -4198,18 +4274,18 @@ void test_crt_strike_pcm_should_swell_fall_and_never_click(void) {
       if (abs(buf[i]) > peak[seg]) peak[seg] = abs(buf[i]);
     }
   }
-  TEST_ASSERT_TRUE(peak[0] < peak[1]);  // swell
-  TEST_ASSERT_TRUE(peak[3] < peak[2]);  // decay
-  TEST_ASSERT_TRUE(peak[4] < peak[3]);  // decaying the whole tail
+  TEST_ASSERT_TRUE(peak[0] > peak[4]);  // thunk carries its energy up front
+  TEST_ASSERT_TRUE(peak[1] > peak[3]);  // envelope decays, no fader stop
 
-  // Click-free: the harmonic-blended low glide peaks a sample step ~1160;
-  // a note-boundary step would clear it by 10x.
+  // Click-free: high partials legitimately step faster than the old 90Hz hum
+  // (unit step ≈ Σ w·2πf/fs ≈ 0.15 → ~4500 at scale); a real click would
+  // clear multiples of that. The bound watches envelope/shape breaks, not Hz.
   int max_step = 0;
   for (size_t i = 1; i < CRT_STRIKE_PCM_SAMPLES; i++) {
     int step = abs(buf[i] - buf[i - 1]);
     if (step > max_step) max_step = step;
   }
-  TEST_ASSERT_TRUE(max_step < 1500);
+  TEST_ASSERT_TRUE(max_step < 6000);
 }
 
 void test_crt_strike_pcm_should_fit_the_speaker_budget(void) {
@@ -4229,11 +4305,15 @@ void test_crt_flash_should_need_backlight_on_and_the_toggle(void) {
   s_settings_crt = 1;
   s_crt_layer = layer_create(GRect(0, 0, 200, 228));
   crt_backlight_handler(true);
+  // Deferred strike: the handler primes only; the wake frame's proc starts it.
+  TEST_ASSERT_EQUAL_INT(CRT_FLASH_IDLE, s_flash_phase);
+  TEST_ASSERT_EQUAL_INT(0, mock_timer_register_count);
+  TEST_ASSERT_TRUE(mock_mark_dirty_count > 0);
+  crt_update_proc(NULL, s_fake_ctx);
   TEST_ASSERT_EQUAL_INT(0, s_flash_phase);
   TEST_ASSERT_EQUAL_INT(1, mock_timer_register_count);
   TEST_ASSERT_EQUAL_UINT32(CRT_FLASH_TICK_MS, mock_timer_last_ms);
   TEST_ASSERT_NOT_NULL(mock_timer_callback);
-  TEST_ASSERT_TRUE(mock_mark_dirty_count > 0);
 
   // Drive the re-arming tick chain to completion; the chain must stop.
   int frames = 0;
@@ -4291,8 +4371,9 @@ void test_crt_toggle_off_mid_strike_should_cancel_the_chain(void) {
   // nobody triggered, dirtying the layer each frame.
   s_settings_crt = 1;
   s_crt_layer = layer_create(GRect(0, 0, 200, 228));
-  crt_backlight_handler(true);  // strike armed, phase 0
-  mock_timer_callback(NULL);    // advance one tick for realism
+  crt_backlight_handler(true);        // primes the strike
+  crt_update_proc(NULL, s_fake_ctx);  // wake frame lands → chain armed
+  mock_timer_callback(NULL);          // advance one tick for realism
   int cancel_before = mock_timer_cancel_count;
 
   s_settings_crt = 0;
@@ -4312,6 +4393,7 @@ int main(void) {
   RUN_TEST(test_render_gate_should_notice_hi_lo_caption_swaps);
   RUN_TEST(test_render_gate_should_reapply_colors_on_theme_change);
   RUN_TEST(test_quick_view_did_change_should_gate_and_restore);
+  RUN_TEST(test_canvas_should_blit_the_scene_cache_on_repeat_renders);
   RUN_TEST(test_canvas_should_skip_the_bottom_row_while_quick_view_is_up);
   RUN_TEST(test_canvas_procs_should_never_word_wrap);
   RUN_TEST(test_hum_pcp_window_should_paint_its_halves);
@@ -4476,7 +4558,7 @@ int main(void) {
   RUN_TEST(test_crt_strike_should_jitter_rows_and_decay);
   RUN_TEST(test_crt_strike_should_slide_rows_and_boost_ca);
   RUN_TEST(test_crt_sound_should_play_only_when_enabled_and_unmuted);
-  RUN_TEST(test_crt_strike_pcm_should_swell_fall_and_never_click);
+  RUN_TEST(test_crt_strike_pcm_should_thunk_fall_and_never_click);
   RUN_TEST(test_crt_strike_pcm_should_fit_the_speaker_budget);
   RUN_TEST(test_crt_flash_should_need_backlight_on_and_the_toggle);
   RUN_TEST(test_crt_setting_push_should_redraw_the_overlay);

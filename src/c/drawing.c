@@ -832,11 +832,63 @@ static bool quick_view_covers_slot(int index) {
   return index >= SLOT_IDX_BOTTOM_LEFT && index <= SLOT_IDX_BOTTOM_RIGHT;
 }
 
+// Whole-face scene cache: a framebuffer snapshot reused on re-renders whose
+// content hasn't changed. The window engine bg-fills and re-runs every
+// layer's proc on each pass, so during strike ticks the scene gets painted
+// from scratch every 90ms — glyphs and frames were the non-pass half of the
+// ~93ms blocked stretch that starved the stock FW's 128ms audio ring
+// (measured 2026-08-23). Redrawn only via request_ui_redraw()/invalidation.
+// HEAP, not .bss: apps have a 64KB virtual_size window and 45.6KB of static
+// cache blows straight through it; the heap had ~54KB free at measure time.
+#define CANVAS_CACHE_BYTES (200 * 228)
+static uint8_t* s_scene_cache = NULL;
+static bool s_scene_cache_valid = false;
+
+// Row-wise copy through GBitmapDataRowInfo: a straight w*h memcpy assumed
+// stride == width and scattered the image (the driver's row stride is not
+// 200). Cache layout stays row-major within the reported column range.
+static void cache_rows_from(GBitmap* fb) {
+  for (int y = 0; y < 228; y++) {
+    GBitmapDataRowInfo row = gbitmap_get_data_row_info(fb, y);
+    memcpy(s_scene_cache + y * 200 + row.min_x, row.data + row.min_x, row.max_x - row.min_x + 1);
+  }
+}
+static void cache_rows_to(GBitmap* fb) {
+  for (int y = 0; y < 228; y++) {
+    GBitmapDataRowInfo row = gbitmap_get_data_row_info(fb, y);
+    memcpy(row.data + row.min_x, s_scene_cache + y * 200 + row.min_x, row.max_x - row.min_x + 1);
+  }
+}
+
+// The scene's contents changed (slot value, theme, obstruction, font init):
+// the next render repaints and re-snapshots instead of blitting.
+void canvas_invalidate_cache(void) {
+  s_scene_cache_valid = false;
+}
+
 void canvas_update_proc(Layer* layer, GContext* ctx) {
   // No background fill: the window root layer fills the whole frame with
   // window->background_color on every render pass (PebbleOS
   // window_do_layer_update_proc), and apply_theme() keeps it at center_bg.
   (void)layer;
+
+  // Cache hit: blit and done. Capture-then-write ONLY here — the framebuffer
+  // may not be drawn into by SDK draw calls while captured, so the live-draw
+  // path stays capture-free until after it paints (learned the hard way:
+  // capturing first produced a black interior and snapshotted that).
+  if (s_scene_cache && s_scene_cache_valid) {
+    GBitmap* fb = graphics_capture_frame_buffer(ctx);
+    if (fb) {
+      // Per-render glyph/frame painting was ~half the ~93ms blocked stretch
+      // that starved stock FW's 128ms audio ring during strike ticks
+      // (measured 2026-08-23). The snapshot holds bg+canvas content only —
+      // the clock draws after us, the CRT overlay after it; neither is in
+      // the cache, both reapply on top. Byte-identical to a live redraw.
+      cache_rows_to(fb);
+      graphics_release_frame_buffer(ctx, fb);
+      return;
+    }
+  }
 
   // TIME is fixed; the centre row is the sixth slot, so the loop below draws
   // its frame and title from whatever source it holds.
@@ -858,6 +910,14 @@ void canvas_update_proc(Layer* layer, GContext* ctx) {
       }
       if (spec && spec->draw) spec->draw(ctx, slot->box_rect, slot->source);
     }
+  }
+
+  if (!s_scene_cache) s_scene_cache = malloc(CANVAS_CACHE_BYTES);
+  GBitmap* fb = s_scene_cache ? graphics_capture_frame_buffer(ctx) : NULL;
+  if (fb) {
+    cache_rows_from(fb);
+    s_scene_cache_valid = true;
+    graphics_release_frame_buffer(ctx, fb);
   }
 }
 
@@ -920,5 +980,6 @@ void request_ui_redraw(void) {
   if (memcmp(&now, &s_shown_ui, sizeof(now)) == 0) return;
 
   s_shown_ui = now;
+  canvas_invalidate_cache();
   if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
 }

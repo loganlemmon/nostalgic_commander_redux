@@ -39,6 +39,12 @@ typedef struct GBitmap {
   uint8_t* data;
 } GBitmap;
 
+typedef struct GBitmapDataRowInfo {
+  uint8_t* data;
+  int16_t min_x;
+  int16_t max_x;
+} GBitmapDataRowInfo;
+
 #define GRect(x, y, w, h) ((GRect){{(x), (y)}, {(w), (h)}})
 #define GPoint(x, y) ((GPoint){(x), (y)})
 
@@ -334,6 +340,7 @@ GBitmap* graphics_capture_frame_buffer(GContext* ctx);
 bool graphics_release_frame_buffer(GContext* ctx, GBitmap* buffer);
 uint8_t* gbitmap_get_data(const GBitmap* bitmap);
 GRect gbitmap_get_bounds(const GBitmap* bitmap);
+GBitmapDataRowInfo gbitmap_get_data_row_info(const GBitmap* bitmap, uint16_t y);
 BatteryChargeState battery_state_service_peek(void);
 void battery_state_service_subscribe(BatteryStateHandler handler);
 bool clock_is_24h_style(void);

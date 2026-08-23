@@ -145,6 +145,10 @@ uint8_t* gbitmap_get_data(const GBitmap* bitmap) {
 GRect gbitmap_get_bounds(const GBitmap* bitmap) {
   return bitmap->bounds;
 }
+GBitmapDataRowInfo gbitmap_get_data_row_info(const GBitmap* bitmap, uint16_t y) {
+  GBitmapDataRowInfo info = {.data = bitmap->data + y * 200, .min_x = 0, .max_x = 199};
+  return info;
+}
 
 bool mock_speaker_muted = false;
 int mock_speaker_play_tracks_count = 0;
