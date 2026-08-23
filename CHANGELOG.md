@@ -6,10 +6,56 @@ All notable changes to Nostalgic Commander. Format follows
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-08-23
+
+### Added
+
+- The CRT aberration separates channels vertically as well as horizontally,
+  one pixel at most, mirrored about the horizontal centre line.
+
+### Changed
+
+- CRT curvature is radial: all four edges bow. It was a vertical gain only,
+  so the top and bottom rows pulled inward up to 5px while the sides stayed
+  straight. Side content warps too now, and the outermost columns at
+  mid-height clip to black, where the vignette is already dark.
+- CRT chromatic aberration samples in thirds of a pixel, two weighted taps
+  per channel. It was whole-pixel in three steps of 0/1/2px, so the fringe
+  switched on at a visible ring; it now grows continuously, and the centre
+  of the screen converges instead of carrying a 2/3px floor. Maximum channel
+  separation is 5.3px (was 4px), and the widest rung starts past the slot
+  text, so it lands on the frame strokes rather than on glyphs.
+- CRT vignette fades over 16px (was 20px), and the low half of the falloff
+  is lifted. At four grey levels the old curve started as a step.
+- Degauss sound is synthesized PCM: a 110ms thunk at 190Hz with partials
+  over a decaying envelope. It was a falling glissando played from a note
+  table, gliding 90Hz down to 55Hz, which put all of its energy below 300Hz
+  where the watch speaker produces nothing. 110ms also fits the firmware's
+  128ms audio ring, so a rendered frame cannot interrupt playback.
+- Weather readings are clamped to the range the layout budgets before they
+  are drawn. A garbage value off the wire could format wider than its slot
+  and paint over the clock.
+
+### Fixed
+
+- A second backlight-on during the degauss strike started a second timer
+  chain, so the strike ran at double speed and then restarted. The pending
+  tick is cancelled now.
+- The 5-second weather retry stopped working for the rest of the session
+  after two send failures in a row. The counter also clears when a payload
+  arrives.
+- The phone dropped a weather reply when the send itself failed, for example
+  on a momentary Bluetooth drop, and the watch stayed stale until its next
+  half-hour tick. The send is retried twice.
+- Two weather fetches could run at once, each with its own location fix and
+  requests, and the slower reply won the cache. One fetch runs at a time.
+- A denied location permission was retried twice on every fetch cycle. It
+  fails straight to `--` now.
+
 ### Removed
 
-- **Disconnect-vibration setting** — the OS owns phone-disconnect vibration
-  now; the face's select and its buzz path are gone.
+- Disconnect-vibration setting. The OS owns phone-disconnect vibration now;
+  the select and its buzz path are gone.
 
 ## [1.7.0] - 2026-08-20
 
@@ -229,7 +275,8 @@ A full battery pass — the face:
 
 - Old tuiface store thumbnail — `screenshots/` covers store imagery.
 
-[Unreleased]: https://github.com/bemyak/nostalgic_commander/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/bemyak/nostalgic_commander/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/bemyak/nostalgic_commander/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/bemyak/nostalgic_commander/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/bemyak/nostalgic_commander/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/bemyak/nostalgic_commander/compare/v1.4.1...v1.5.0

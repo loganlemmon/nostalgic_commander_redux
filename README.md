@@ -66,6 +66,7 @@ deliberately few:
 |---------|---------|
 | Theme | Turbo Vision, Norton, Dark, Navigator |
 | Units | Imperial, Metric |
+| Weather forecast window | Now, 2, 8, 12 (default), 24 hours |
 | Date format | ISO, DOS, full text, short |
 | Short date format | Month-Day, Day-Month |
 | Day of week | Before date, after date, hidden |
