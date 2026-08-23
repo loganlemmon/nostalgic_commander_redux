@@ -2996,6 +2996,31 @@ void test_inbox_should_parse_weather_payload_and_persist(void) {
   TEST_ASSERT_EQUAL_INT(42, s_weather_aqi);
 }
 
+void test_inbox_should_clamp_garbage_weather_ints(void) {
+  // A torn/garbage wire int must never paint past the slot — the negative
+  // case of the payload guards. Sentinels (−999/−1) are exempt by design.
+  mock_persist_reset();
+  mock_dict_reset();
+  mock_dict_add_int(MESSAGE_KEY_WEATHER_TEMP, 2000000000);
+  mock_dict_add_int(MESSAGE_KEY_WEATHER_COND, 0);
+  mock_dict_add_int(MESSAGE_KEY_WEATHER_AQI, -5);
+  mock_dict_add_int(MESSAGE_KEY_WEATHER_UV, 999);
+  mock_dict_add_int(MESSAGE_KEY_WEATHER_WIND_DIRECTION, 720);
+  mock_dict_add_int(MESSAGE_KEY_WEATHER_WIND_SPEED, 28123);
+  mock_dict_add_int(MESSAGE_KEY_WEATHER_HI_HOUR_TODAY, 25);
+
+  inbox_received_callback(NULL, NULL);
+
+  TEST_ASSERT_EQUAL_INT(999, s_weather_temp);
+  TEST_ASSERT_EQUAL_INT(0, s_weather_aqi);
+  TEST_ASSERT_EQUAL_INT(11, s_weather_uv);
+  TEST_ASSERT_EQUAL_INT(360, s_weather_wind_direction);
+  TEST_ASSERT_EQUAL_INT(999, s_weather_wind_speed);
+  TEST_ASSERT_EQUAL_INT(23, s_hi_hour_today);
+  // The untouched-sentinel rule: an absent field must keep its sentinel.
+  TEST_ASSERT_EQUAL_INT(-1, s_weather_humidity);
+}
+
 void test_inbox_should_parse_narrow_width_weather_ints(void) {
   // The SDK sends 1-, 2- or 4-byte ints; the parse must not depend on the
   // sender picking the wide form.
@@ -4498,6 +4523,7 @@ int main(void) {
   RUN_TEST(test_health_handler_should_not_throttle_significant_updates);
   RUN_TEST(test_undisplayed_health_metrics_should_read_as_no_data);
   RUN_TEST(test_inbox_should_parse_weather_payload_and_persist);
+  RUN_TEST(test_inbox_should_clamp_garbage_weather_ints);
   RUN_TEST(test_inbox_should_parse_narrow_width_weather_ints);
   RUN_TEST(test_inbox_should_parse_and_persist_tomorrow_low);
   RUN_TEST(test_inbox_should_parse_and_persist_wind_direction);

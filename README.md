@@ -69,7 +69,8 @@ deliberately few:
 | Date format | ISO, DOS, full text, short |
 | Short date format | Month-Day, Day-Month |
 | Day of week | Before date, after date, hidden |
-| Enable vibration on phone disconnect | On (default), off — the buzz doubles as the dead-phone detector |
+| CRT effect | On, off (default) |
+| CRT degauss sound | On, off (default) |
 | Slots 1–6 | Data source per slot, or Empty |
 
 That's the whole surface. Good defaults over knobs; if a behavior isn't

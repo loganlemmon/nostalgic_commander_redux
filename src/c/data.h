@@ -30,7 +30,7 @@ typedef enum {
   DATA_SOURCE_WIND = 34,
   DATA_SOURCE_HUM_PCP = 35,
   DATA_SOURCE_WEEK_NUMBER = 33,
-  // Retired ids: 19 (UTC_OFFSET), 29 (SUN_TIMES), 33 (ARROWS font test).
+  // Retired ids: 19 (UTC_OFFSET), 29 (SUN_TIMES).
   DATA_SOURCE_EMPTY = 20
 } ComplicationDataSource;
 

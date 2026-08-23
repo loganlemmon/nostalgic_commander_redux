@@ -125,6 +125,36 @@ void save_weather_cache(void) {
   persist_write_int(PERSIST_KEY_WEATHER_TIMESTAMP, (int32_t)time(NULL));
 }
 
+// A torn or garbage wire int must never paint past its slot: 2000000000 off
+// the wire formats to ten digits and spills out of a 93px window into the
+// TIME region. Clamp each reading to the band the layout budgets for; the
+// wind cap's 999 matches the formatter's existing clamp (data.c).
+static void clamp_int_bounded(int* v, int sentinel, int lo, int hi) {
+  if (*v == sentinel) return;  // sentinel = "no reading"; never clamp it away
+  if (*v < lo) *v = lo;
+  if (*v > hi) *v = hi;
+}
+
+static void clamp_weather_values(void) {
+  clamp_int_bounded(&s_weather_temp, -999, -99, 999);
+  clamp_int_bounded(&s_temp_high, -999, -99, 999);
+  clamp_int_bounded(&s_temp_low, -999, -99, 999);
+  clamp_int_bounded(&s_temp_low_tmrw, -999, -99, 999);
+  clamp_int_bounded(&s_temp_high_tmrw, -999, -99, 999);
+  clamp_int_bounded(&s_weather_cond_code, -1, 0, 99);  // WMO table is < 100
+  clamp_int_bounded(&s_weather_aqi, -1, 0, 500);
+  clamp_int_bounded(&s_weather_uv, -1, 0, 11);  // WMO UV is 1..11
+  clamp_int_bounded(&s_weather_humidity, -1, 0, 100);
+  clamp_int_bounded(&s_weather_pcp, -1, 0, 100);
+  clamp_int_bounded(&s_precip_now, -1, 0, 999);
+  clamp_int_bounded(&s_weather_wind_direction, -1, 0, 360);
+  clamp_int_bounded(&s_weather_wind_speed, -1, 0, 999);
+  clamp_int_bounded(&s_hi_hour_today, -1, 0, 23);
+  clamp_int_bounded(&s_lo_hour_today, -1, 0, 23);
+  clamp_int_bounded(&s_hi_hour_tmrw, -1, 0, 23);
+  clamp_int_bounded(&s_lo_hour_tmrw, -1, 0, 23);
+}
+
 bool load_weather_cache(void) {
   if (!persist_exists(PERSIST_KEY_WEATHER_TIMESTAMP)) return false;
 
@@ -190,7 +220,9 @@ void inbox_received_callback(DictionaryIterator* iterator, void* context) {
   // Persist the weather cache only for a real weather payload, so a
   // settings-only message can't refresh the timestamp.
   if (temp_tuple && cond_tuple) {
+    clamp_weather_values();
     save_weather_cache();
+    weather_request_answered();
   }
 
   // Settings: Clay sends strings; tuple_get_int() accepts those and ints.

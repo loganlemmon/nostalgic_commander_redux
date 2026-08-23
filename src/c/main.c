@@ -202,6 +202,14 @@ static void outbox_sent_callback(DictionaryIterator* iterator, void* context) {
   s_weather_request_retries = 0;
 }
 
+// The counter must also clear when an answer lands: outbox_sent covers the
+// SEND, but a momentary double failure leaves the counter capped — and the
+// 5s retry path then stays dead for the rest of the app's life. An arrived
+// payload is proof the loop works; reset here too.
+void weather_request_answered(void) {
+  s_weather_request_retries = 0;
+}
+
 static void outbox_failed_callback(DictionaryIterator* iterator, AppMessageResult reason,
                                    void* context) {
   (void)iterator;

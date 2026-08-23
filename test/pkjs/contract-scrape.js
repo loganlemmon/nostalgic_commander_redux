@@ -23,9 +23,14 @@ function dataSourceIds() {
   const start = header.indexOf('typedef enum {');
   const body = header.slice(start, header.indexOf('} ComplicationDataSource', start));
   const ids = new Map();
+  const seenValues = new Map();
   for (const m of body.matchAll(/(DATA_SOURCE_[A-Z0-9_]+)\s*=\s*(\d+)/g)) {
     assert.ok(!ids.has(m[1]), `duplicate enum member ${m[1]}`);
+    assert.ok(
+        !seenValues.has(Number(m[2])),
+        `duplicate enum value ${m[2]} (${m[1]} vs ${seenValues.get(Number(m[2]))})`);
     ids.set(m[1], Number(m[2]));
+    seenValues.set(Number(m[2]), m[1]);
   }
   assert.ok(ids.size > 0, 'ComplicationDataSource enum not parsed — pattern drift?');
   return ids;

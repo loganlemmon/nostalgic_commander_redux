@@ -36,7 +36,7 @@
 - Consumes: nothing new; zone macros from crt.h unchanged.
 - Produces: `int crt_ca_shift3(int x, int y, int w, int h)` — per-channel horizontal displacement in THIRDS of a pixel (0 inside the dead zone, 3 mid, 6 toward corners), replacing `int crt_ca_shift(...)`. `static int crt_ca_t3_h2(int xy_sum)` — same thresholds, returns 0/3/6. Task 2's pass loop consumes `crt_ca_t3_h2`.
 
-- [ ] **Step 1: Rewrite the two spec-named tests in thirds + add the ladder test (failing)**
+- [x] **Step 1: Rewrite the two spec-named tests in thirds + add the ladder test (failing)**
 
 In `test/test_watchface.c`, replace the body of `test_crt_ca_onset_should_cut_at_the_dead_zone`:
 
@@ -97,12 +97,12 @@ Register the new test in `main()` after `RUN_TEST(test_crt_ca_onset_should_cut_a
   RUN_TEST(test_crt_ca_ladder_should_be_monotone_and_mirror_symmetric);
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `make -C test test 2>&1 | tail -20`
 Expected: compile error — `crt_ca_shift3` undeclared (RED by rename, which is fine; the runner must not pass).
 
-- [ ] **Step 3: Implement the thirds rungs**
+- [x] **Step 3: Implement the thirds rungs**
 
 In `src/c/crt.c`, rename and re-value the rung function (keep the comment's squared-threshold explanation, update units):
 
@@ -151,12 +151,12 @@ In `src/c/crt.h`, update the zone comment and the declaration:
 int crt_ca_shift3(int x, int y, int w, int h);
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `make -C test test 2>&1 | tail -20`
 Expected: PASS, including the rewritten blocks and the ladder (the temporary `(t3+1)/3` projection preserves old pass behaviour: t3∈{0,3,6} → (1/3)=0, (4/3)=1, (7/3)=2).
 
-- [ ] **Step 5: Format check**
+- [x] **Step 5: Format check**
 
 Run: `make format-check`
 Expected: PASS; else `make format` and re-run Step 4.
@@ -178,7 +178,7 @@ Expected: PASS; else `make format` and re-run Step 4.
   - Weighted channel: `( (3−f)*v(tap0) + f*v(tap1) ) / 3`, v = the channel's 2-bit level from the vertical-CA ring row. All four tap columns clamped to [0,w) individually.
   - R reads ring row `ry`, B reads ring row `by` (both taps of a channel from the SAME ring row — vertical CA unchanged, ring memcpys unchanged).
 
-- [ ] **Step 1: Write the four new framebuffer tests (failing)**
+- [x] **Step 1: Write the four new framebuffer tests (failing)**
 
 Insert after `test_crt_ca_should_pull_red_from_the_left`, then register each with `RUN_TEST` in `main()`. That pre-existing bar test must survive UNCHANGED — the new geometry still gives its dest(22,109) an R level of exactly 2 (`(0 + 2*3)/3`); if it fails, the implementation is wrong, not the test.
 
@@ -302,12 +302,12 @@ Register all four after the existing `RUN_TEST(test_crt_ca_should_pull_red_from_
   RUN_TEST(test_crt_ca_should_never_split_a_feature_into_two_ghosts);
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `make -C test test 2>&1 | grep -E "FAIL|zero_point|stack|clamp|split" | head -20`
 Expected: at least the zero_point and strike_stack tests FAIL (old whole-pixel pass leaves the line untouched / shifts it differently). RED confirmed.
 
-- [ ] **Step 3: Implement the weighted sampler in stage 1**
+- [x] **Step 3: Implement the weighted sampler in stage 1**
 
 In `src/c/crt.c`, replace the stage-1 per-pixel block. The old block:
 
@@ -405,14 +405,14 @@ Also update the `// 1) CA from raw sources:` comment above the loop to note the 
       //    fringe samples ring rows toward/away from the centreline.
 ```
 
-- [ ] **Step 4: Run the full suite**
+- [x] **Step 4: Run the full suite**
 
 Run: `make -C test test 2>&1 | tail -25`
 Expected: PASS, all CRT tests including the four new ones GREEN, and the pre-existing bar/warp/strike-slide/vignette tests unchanged and passing.
 
 If the new tests fail: recompute the expected levels from the q/j/f formulas against the actual coordinates before touching the code — the plan's derivation (comments under each test) is the ground truth for what the fixture should produce; a mismatch means the implementation deviates from the formula, not that the test is stale.
 
-- [ ] **Step 5: Format check**
+- [x] **Step 5: Format check**
 
 Run: `make format-check`
 Expected: PASS; else `make format` and re-run Step 4.
@@ -429,12 +429,12 @@ Expected: PASS; else `make format` and re-run Step 4.
 - Consumes: working build from Tasks 1-2.
 - Produces: a passing `make visual-check`.
 
-- [ ] **Step 1: Full test gate**
+- [x] **Step 1: Full test gate**
 
 Run: `make test`
 Expected: PASS (format + JS + C suite).
 
-- [ ] **Step 2: Regenerate the visual baseline**
+- [x] **Step 2: Regenerate the visual baseline**
 
 The weighted CA changes logical pixels everywhere (inside the dead zone, white text's R/B drop from 3 to 2 — the zero-point correction), so the committed baseline must be regenerated or `visual-check` fails forever.
 
@@ -443,12 +443,12 @@ Expected: new `test/visual/baseline.png` committed to the working copy (jj track
 
 Requires the emery emulator; if `pebble install --emulator emery` cannot connect in this environment, STOP and report — do not hand-fake the PNG.
 
-- [ ] **Step 3: Verify the gate passes with the new baseline**
+- [x] **Step 3: Verify the gate passes with the new baseline**
 
 Run: `make visual-check`
 Expected: `visual-check (attempt 1): 0 pixels differ outside the masks` (a later attempt's 0 is acceptable per the Makefile's retry semantics; report which attempt passed).
 
-- [ ] **Step 4: Regenerate the README screenshot**
+- [x] **Step 4: Regenerate the README screenshot**
 
 The centre-tint change alters the face's rendered appearance, and AGENTS.md ties `screenshot_current.png` to any appearance change.
 
@@ -456,7 +456,7 @@ Run: `pebble screenshot --emulator emery --no-open screenshot_current.png`
 (The face should already be installed from Step 2; if the emulator was restarted, re-run `pebble install --emulator emery` first and wait ~5s for the first real render.)
 Expected: file updated; confirm with `jj status`.
 
-- [ ] **Step 5: Report**
+- [x] **Step 5: Report**
 
 State: tests pass count, which visual-check attempt passed, both PNGs updated. Remind the requester that the fringe's actual look is a hardware judgement — the spec says only the watch can answer whether weighted CA reads better than the 0/1/2px zones; the emulator cannot.
 

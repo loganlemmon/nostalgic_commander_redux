@@ -47,7 +47,7 @@ Useful exact values (Q8 elliptical radius, w=200, h=228):
   - `int crt_warp_sx(int x, int y, int w, int h)` — full source column mapping without strike jitter: `((w-1)*65536 + (2*x-(w-1)) * crt_warp_q16(x, y, w, h) + 65536) >> 17`. Task 2's stage-3 loop inlines the same expression (reading M from the cached terms) and adds `row_off`; this exported function is the pin target for the seam-spread test.
   - `#define CRT_WARP_R2_K 13` in src/c/crt.h.
 
-- [ ] **Step 1: Rewrite the failing tests**
+- [x] **Step 1: Rewrite the failing tests**
 
 In `test/test_watchface.c`, in `test_crt_pure_geometry_should_match_the_spec`, replace the warp block (currently three `crt_warp_inset` asserts at ~3930-3932):
 
@@ -118,12 +118,12 @@ Register in `main()` right after `RUN_TEST(test_crt_pure_geometry_should_match_t
   RUN_TEST(test_crt_warp_should_spread_steps_across_rows);
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `make -C test test 2>&1 | tail -15`
 Expected: compile error — `crt_warp_q16`/`crt_warp_sx` undeclared, and `crt_warp_inset` still exists until Step 3 (step 1 must NOT delete it yet or other tests break compile — wait, the old asserts referencing crt_warp_inset were already replaced in Step 1, so it compiles only after Step 3; treat the whole RED as the compile failure).
 
-- [ ] **Step 3: Implement the pure functions; update header**
+- [x] **Step 3: Implement the pure functions; update header**
 
 In `src/c/crt.c`, replace the `crt_warp_inset` definition (lines 29-32):
 
@@ -181,12 +181,12 @@ int crt_warp_sx(int x, int y, int w, int h);
 
 Stage 3 still references `crt_warp_inset` — do NOT fix it here; leave a deliberate compile break IF AND ONLY IF the header decl removal already breaks it (it will). Accept RED at this step.
 
-- [ ] **Step 4: Run**
+- [x] **Step 4: Run**
 
 Run: `make -C test test 2>&1 | tail -15`
 Expected: FAIL to compile at the stage-3 call site (`crt_warp_inset` undeclared). This broken tree is handed to Task 2 — Task 1 and Task 2 run back-to-back; do not hand a half state to anyone else.
 
-- [ ] **Step 5: No format gate yet** (deferred to Task 2's tail — tree doesn't compile).
+- [x] **Step 5: No format gate yet** (deferred to Task 2's tail — tree doesn't compile).
 
 ---
 
@@ -201,7 +201,7 @@ Expected: FAIL to compile at the stage-3 call site (`crt_warp_inset` undeclared)
 - Consumes: `crt_warp_q16`/`crt_warp_sx`/`CRT_WARP_R2_K` from Task 1 (signatures above); the existing per-row `yterm` and the `s_ca_xq[]` cache already computed for stage 1.
 - Produces: working warp; green suite; green visual-check.
 
-- [ ] **Step 1: Replace the stage-3 block**
+- [x] **Step 1: Replace the stage-3 block**
 
 In `src/c/crt.c`, the current block (~214-231):
 
@@ -243,17 +243,17 @@ become (drop BOTH lines; the `int ey`...block between them stays exactly as is):
 
 Verify no references remain: `grep -rn "crt_warp_inset\|CRT_WARP_MAX_PX" src/ test/test_watchface.c` → empty.
 
-- [ ] **Step 2: Run the suite; recompute the bar fixture if it moved**
+- [x] **Step 2: Run the suite; recompute the bar fixture if it moved**
 
 Run: `make -C test test 2>&1 | tail -25`
 Expected: likely GREEN as-is — precomputed: with M, `crt_warp_sx(54,20)=52`, `crt_warp_sx(56,20)=54`, `crt_warp_sx(145,20)=147`, so the G-bar fixture's three assertions (centre 56 full, both edges pulled) hold under the new map. If any differ, recompute expected columns from `crt_warp_sx` on the bar's columns and update only those lines — never weaken the assertions.
 
-- [ ] **Step 3: Format gate**
+- [x] **Step 3: Format gate**
 
 Run: `make format-check && make test`
 Expected: clean.
 
-- [ ] **Step 4: Regenerate both captures**
+- [x] **Step 4: Regenerate both captures**
 
 Appearance changed materially (side bow). Emulator flash was factory-reset earlier; healthy.
 
@@ -262,7 +262,7 @@ Then: `pebble screenshot --emulator emery --no-open screenshot_current.png`
 Expected: `visual-check (attempt N): 0 pixels differ outside the masks`; screenshot saved.
 If the emulator hangs again: the fix from earlier today is to move aside `~/.pebble-sdk/4.33.1/emery/qemu_spi_flash.bin` and retry (report that you did).
 
-- [ ] **Step 5: Report**
+- [x] **Step 5: Report**
 
 Full report to the path given by dispatch. Surface explicitly: side-bow magnitude observed in the new capture vs old (read both PNGs if you can; otherwise note the geometry), and confirm stage 1/2 and strike were untouched.
 

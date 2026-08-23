@@ -12,12 +12,45 @@ var WEATHER_RETRY_DELAY_MS = 15 * 1000;
 function retryWeather(attempt, reason) {
   if (attempt >= WEATHER_MAX_RETRIES) {
     console.log('Weather fetch failed (' + reason + '); retries exhausted');
+    endWeatherFetch();
     return;
   }
+  // The chain is BETWEEN fetches during the wait — release the guard so an
+  // incoming request gives up nothing (the later scheduled getWeather()
+  // re-acquires cleanly if no other chain took it).
+  endWeatherFetch();
   console.log(
       'Weather fetch failed (' + reason + '); retrying in ' + (WEATHER_RETRY_DELAY_MS / 1000) +
       's');
   setTimeout(function() { getWeather(attempt + 1); }, WEATHER_RETRY_DELAY_MS);
+}
+
+// A reply lost to a momentary BT drop would otherwise keep the watch stale
+// until its next :00/:30 tick; retry the send a couple of times.
+var WEATHER_SEND_MAX_RETRIES = 2;
+var WEATHER_SEND_RETRY_DELAY_MS = 5 * 1000;
+
+var weatherFetchInFlight = false;
+
+function endWeatherFetch() { weatherFetchInFlight = false; }
+
+function doSendWeatherDict(dict, logLabel, attempt) {
+  Pebble.sendAppMessage(
+      dict,
+      function(e) {
+        console.log(logLabel + ' sent successfully!');
+        endWeatherFetch();
+      },
+      function(e) {
+        if (attempt < WEATHER_SEND_MAX_RETRIES) {
+          var next = attempt + 1;
+          setTimeout(
+              function() { doSendWeatherDict(dict, logLabel, next); }, WEATHER_SEND_RETRY_DELAY_MS);
+          return;
+        }
+        console.log('Error sending ' + logLabel + ': ' + JSON.stringify(e));
+        endWeatherFetch();
+      });
 }
 
 function sendWeatherDict(dict, logLabel) {
@@ -26,9 +59,7 @@ function sendWeatherDict(dict, logLabel) {
   } catch (e) {
     console.log('Error writing weather cache: ' + e);
   }
-  Pebble.sendAppMessage(
-      dict, function(e) { console.log(logLabel + ' sent successfully!'); },
-      function(e) { console.log('Error sending: ' + JSON.stringify(e)); });
+  doSendWeatherDict(dict, logLabel, 0);
 }
 
 function readFreshWeatherCache() {
@@ -75,6 +106,11 @@ Pebble.addEventListener('appmessage', function(e) {
 });
 
 function getWeather(attempt) {
+  if (weatherFetchInFlight) {
+    console.log('Weather fetch already in flight; dropping trigger');
+    return;
+  }
+  weatherFetchInFlight = true;
   attempt = attempt || 0;
   navigator.geolocation.getCurrentPosition(
       function(position) {
@@ -168,6 +204,15 @@ function getWeather(attempt) {
         aqiXhr.timeout = 10000;
         aqiXhr.send();
       },
-      function(err) { retryWeather(attempt, 'geolocation: ' + err.message); },
+      function(err) {
+        // PERMISSION_DENIED won't change under retrying (it would only
+        // re-prompt); leave "--" on the watch.
+        if (err.code === err.PERMISSION_DENIED) {
+          console.log('Geolocation permission denied; no retry');
+          endWeatherFetch();
+          return;
+        }
+        retryWeather(attempt, 'geolocation: ' + err.message);
+      },
       {timeout: 15000, maximumAge: weather.GEOLOCATION_MAX_AGE_MS});
 }

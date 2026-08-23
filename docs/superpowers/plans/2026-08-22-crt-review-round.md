@@ -41,7 +41,7 @@
 **Interfaces:**
 - Consumes / produces: same external functions. Behavioural deltas: right-half CA shifts +2/3px (from −2/3 to 0 error); all R/B thirds blends now round-to-nearest.
 
-- [ ] **Step 1: Extend the zero-point test to the right half (failing)**
+- [x] **Step 1: Extend the zero-point test to the right half (failing)**
 
 In `test_crt_ca_zero_point_should_mirror_ghosts_about_the_line`, after the existing left-half assertions, add the mirrored right-half fixture. Compute expected values from the FIXED formula. At (139,113): xq(139) = (79²·256)/199² = 6241·256/39601 = 40; sum 40 < 113 → t3 = 0. Right half, fixed q = 0 + 1 = 1 → j = 0, f = 1. New line fixture at column 139 (right half), same rows 112..114:
 
@@ -68,7 +68,7 @@ for (int d = -2; d <= 2; d++) {
 ```
 The bug fails this: left half converges (ghost magnitudes 2/1 symmetric-ish), right half carries +2/3 residual → B/R motifs won't mirror.
 
-- [ ] **Step 2: GREEN — apply the fix**
+- [x] **Step 2: GREEN — apply the fix**
 
 In `src/c/crt.c` stage 1: hoist `bool left` above q; change q:
 ```c
@@ -87,7 +87,7 @@ int b = ((3 - f) * (brow[bt0] & 3) + f * (brow[bt1] & 3) + 1) / 3;
 ```
 (One-line comment update on the existing blend comment: rounding removes the half-level downward bias that put a faint green cast on mid-tones — G is never blended.)
 
-- [ ] **Step 3: Recheck every CA fixture against the new semantics**
+- [x] **Step 3: Recheck every CA fixture against the new semantics**
 
 Run `make -C test test`. Failure candidates, with ground truth to recompute (rounding + right-half sign):
 - `test_crt_ca_zero_point_...` (left half values unchanged: f=2 exact-biased blends ((0+2·3+1)/3 = 2, (3+0+1)/3 = 1) — verify
@@ -97,7 +97,7 @@ Run `make -C test test`. Failure candidates, with ground truth to recompute (rou
 - `test_crt_ca_should_never_split_a_feature_into_two_ghosts` (sweep both halves: drift bounds and runs ≤ 1 semantics; right-half motif positions shift — recompute; seam carve-out c∈{99,100} unchanged)
 - `test_crt_pure_geometry_should_match_the_spec` / ladder test (pure function — crt_ca_shift3 does NOT include the correction; unchanged)
 
-- [ ] **Step 4: Format gate** — `make format-check && make test`.
+- [x] **Step 4: Format gate** — `make format-check && make test`.
 
 ---
 
@@ -109,7 +109,7 @@ Run `make -C test test`. Failure candidates, with ground truth to recompute (rou
 
 **Interfaces:** unchanged. New invariant: while CRT is off, no timer chain is armed and a leftover callback firing is inert.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 After `test_crt_toggle_off_should_force_a_full_repaint`:
 
@@ -136,7 +136,7 @@ void test_crt_toggle_off_mid_strike_should_cancel_the_chain(void) {
 
 Also note for setUp: setUp must reset mock_timer_cancel_count if it's new; and `crt_apply_setting_change` when ON (the early-return branch) — no test change needed.
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 In `crt_apply_setting_change`, the off path (`else` after the enabled early-return), before/at phase reset:
 ```c
@@ -149,7 +149,7 @@ In `crt_apply_setting_change`, the off path (`else` after the enabled early-retu
   }
 ```
 
-- [ ] **Step 3: `make -C test test`, then `make format-check`.**
+- [x] **Step 3: `make -C test test`, then `make format-check`.**
 
 ---
 
@@ -161,7 +161,7 @@ In `crt_apply_setting_change`, the off path (`else` after the enabled early-retu
 
 **Interfaces:** unchanged. Behavioural delta: at each pass's boundary row, the forward vertical tap reads the own row instead of a 3-rows-stale slot.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 The stale read only shows when the forward ring slot's neighbour differs from own row. A targeted fixture: rows 112, 113, 114 all-black except row 111 and row 116 get a red marker at the s_v=1 columns. At pass 0 processing y=113: ry = 114 → slot 0 → holds row 111 → old code bleeds red into (x≤33, 113). After the fix, (x≤33, 113) R reads own row 113 → dark.
 
@@ -181,7 +181,7 @@ void test_crt_ca_boundary_row_should_not_read_across_halves(void) {
 ```
 (Watch out: the warp on row 113 with K=12 maps dest x to sx(0,113)≤... sx(0,113) = −5 → black clip; dest x range displayed → check the mapping: at K=12, sx(x,113) = x + small; the marker zone maps roughly 1:1 with slight outward shift — executor: verify which dest columns display CA columns 0..30 and adjust assert window accordingly; recomputing via crt_warp_sx formula.)
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 In stage 1, replace the unconditional vertical rows:
 ```c
@@ -200,7 +200,7 @@ with a half-clamped ry (by always stays in the own half — forward reads cross,
 ```
 (exact placement relative to the existing clamp-to-bounds lines: before them; they stay.)
 
-- [ ] **Step 3: `make -C test test`, then `make format-check`.**
+- [x] **Step 3: `make -C test test`, then `make format-check`.**
 
 ---
 
@@ -215,7 +215,7 @@ with a half-clamped ry (by always stays in the own half — forward reads cross,
 - Consumes: `crt_warp_q16` formulation, cached `s_ca_xq[x] + yterm`.
 - Produces: stage 3 blends per channel between the two nearest source columns when the warp lands on a fraction; strike offset added to the floored integer column.
 
-- [ ] **Step 1: Write the failing test — energy preservation under magnification**
+- [x] **Step 1: Write the failing test — energy preservation under magnification**
 
 A comb fixture through a warp zone loses columns under nearest-neighbour; blending preserves their energy:
 
@@ -256,7 +256,7 @@ Also add the seam-adjacent invariant the blend guarantees: adjacent output colum
 ```
 (G only: CA blends R/B by design; G's jumps are the warp's own.)
 
-- [ ] **Step 2: Implement stage-3 blend**
+- [x] **Step 2: Implement stage-3 blend**
 
 Replace the stage-3 loop body:
 ```c
@@ -290,7 +290,7 @@ Notes:
 - `row_off` applied to the floored column (strike is whole-px by design).
 - The old comment block about rounding both signs moves/adapts: the +half still centres the nearest cell for S, document.
 
-- [ ] **Step 3: Suite + fixtures**
+- [x] **Step 3: Suite + fixtures**
 
 Run `make -C test test`. Fixtures that legitimately move (recompute from formulas; never weaken):
 - `test_crt_warp_should_pull_the_top_row_inward` G-bar edge asserts (blended edges now carry level-1/2 where they were 0 — the `< 3` assertions likely survive; verify)
@@ -299,11 +299,11 @@ Run `make -C test test`. Fixtures that legitimately move (recompute from formula
 - `test_crt_ca_should_never_split_a_feature_into_two_ghosts` (blending can turn a gap into nonzero-but-level-1 run — runs counting changes: blending NEVER creates runs>max... it can FILL a two-run gap if an intermediate column gets level ≥1!? Blend fills only between two nonzero neighbours separated by ≤1 col — a duplicated-pair gap would fill... the test's purpose is anti-duplication: blending a dropped column between runs of a duplicated feature would MERGE them into one run — false pass. Executor: consider whether blend invalidates the test's mechanism and say so in the report; if it does, tighten the width bound (≤ 3 covers merged 2-run? merged 2 runs of ≤2 with 1 fill = 5 > 3 — still caught by width) — keep width ≤ 3 assertion.)
 - The dither/vignette/corners tests (identity/dead zones unchanged)
 
-- [ ] **Step 4: Regenerate captures**
+- [x] **Step 4: Regenerate captures**
 
 `make visual-baseline && make visual-check` then screenshot_current.png refresh. Report which attempt passed.
 
-- [ ] **Step 5: Report** — include the measured NN-vs-blended energy numbers and a one-line performance note (stage 3 cost delta).
+- [x] **Step 5: Report** — include the measured NN-vs-blended energy numbers and a one-line performance note (stage 3 cost delta).
 
 ---
 
@@ -312,12 +312,12 @@ Run `make -C test test`. Fixtures that legitimately move (recompute from formula
 **Files:**
 - Modify: `src/c/crt.h`, `src/c/crt.c`
 
-- [ ] **Step 1: Fix the three stale comments**
+- [x] **Step 1: Fix the three stale comments**
   - `crt.h` — "3 or 6"/old ladder wording (current location to grep: `grep -n "3 or 6\|0/3/6" src/c/crt.h`) — should describe 0/4/8 thirds.
   - `crt.h` — "50ms ticks" vs `CRT_FLASH_TICK_MS 90` (grep `50`).
   - `src/c/crt.c` — clamp comment "max strike (j=4)"/"j up to 4": with rung 8 + boost 3 the right half now reaches q = 18 → j = 6 (after Task 1's sign fix: right half adds +1): recompute and state j_max = 6 on the correction side. Update both spots and the strike test comment if it quotes j.
 
-- [ ] **Step 2: `make format-check && make test`** (comment-only delta; suite must stay green).
+- [x] **Step 2: `make format-check && make test`** (comment-only delta; suite must stay green).
 
 ---
 
