@@ -27,21 +27,17 @@ extern Layer* s_crt_layer;
 #define CRT_CORNER_RADIUS 14
 #define CRT_WARP_R2_K 12
 // CA zones by elliptical radius (Q8 of r²-summated terms; mid-edges ≈ 256,
-// corner ≈ 362). r < R2: clean; R2..R3: 1+1/3px; beyond R3: 2+2/3px per channel —
-// expressed in thirds (0/4/8) because stage 1 samples fractionally, and a
+// corner ≈ 362). r < R2: clean; beyond: a flat 1+1/3px per channel —
+// expressed in thirds (0/4) because stage 1 samples fractionally, and a
 // per-half ±1 third in the pass cancels the panel's built-in element offset
 // (the stripe does not mirror: −1 left, +1 right) so the centre of the screen
 // converges instead of carrying a 2/3px floor.
-// Max separation 4px→5.3px: hardware A/B asked for a promoted fringe.
 // Vertical uses one threshold (R2V) with a 1px cap, whole pixels still.
 #define CRT_CA_R2_Q8 170
-#define CRT_CA_R3_Q8 \
-  325  // sits past slot glyphs (sum ≤405): the max rung lives on frame strokes, not text
 #define CRT_CA_R2V_Q8 170
 
 // Squared thresholds for the zone compare — no per-pixel sqrt needed.
 #define CRT_CA_R2_X2Q8 ((CRT_CA_R2_Q8 * CRT_CA_R2_Q8 + 255) >> 8)
-#define CRT_CA_R3_X2Q8 ((CRT_CA_R3_Q8 * CRT_CA_R3_Q8 + 255) >> 8)
 #define CRT_CA_R2V_X2Q8 ((CRT_CA_R2V_Q8 * CRT_CA_R2V_Q8 + 255) >> 8)
 
 // The wake-up: a degauss strike. On backlight-on, FRAMES 90ms ticks of
@@ -67,7 +63,7 @@ int crt_warp_q16(int x, int y, int w, int h);
 // Source column for dest (x,y) under the warp alone (no strike jitter).
 int crt_warp_sx(int x, int y, int w, int h);
 // CA per-channel displacement in THIRDS of a px at (x,y): 0 inside the dead
-// zone, 4 or 8 toward the edge — see crt.h's CRT_CA_R*_Q8 zone map.
+// zone, 4 past it — see crt.h's CRT_CA_R*_Q8 zone map.
 int crt_ca_shift3(int x, int y, int w, int h);
 
 // The whole pass over an 8-bit GColor8 framebuffer (0xAARRGGBB packed bytes,

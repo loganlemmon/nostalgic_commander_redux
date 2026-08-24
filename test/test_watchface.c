@@ -3996,8 +3996,7 @@ void test_crt_ca_should_never_split_a_feature_into_two_ghosts(void) {
   for (int c = 20; c <= 179; c++) {
     // Skip the pull-direction sign seam — a structural artifact of
     // zone-sampled CA that predates this sampler (a 1px feature's fringes
-    // echo symmetric about the seam). The rung-8 zone sits beyond the sweep
-    // columns since CRT_CA_R3_Q8 went 280 → 325 (slot glyphs kept out of it).
+    // echo symmetric about the seam).
     if (c >= 98 && c <= 100) continue;
     memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));
     for (int y = 18; y <= 22; y++) mock_framebuffer[y * 200 + c] = 0xFF;
@@ -4031,7 +4030,7 @@ void test_crt_ca_should_never_split_a_feature_into_two_ghosts(void) {
       if (runs == 1) {
         TEST_ASSERT_TRUE_MESSAGE(
             abs(run_start + run_end - 2 * c) <= 16,
-            "ghost drifted from the feature");  // pull 8/3 + warp ≤ 5 at the rim
+            "ghost drifted from the feature");  // pull 4/3 + warp ≤ 5 at the rim
       }
     }
   }
@@ -4057,10 +4056,10 @@ void test_crt_ca_boundary_row_should_not_read_across_halves(void) {
 
 void test_crt_ca_onset_should_cut_at_the_dead_zone(void) {
   // Centre never fringes (separation 0, not the old 2/3px floor); corners
-  // corners split the full 2+2/3px (8 thirds per channel).
+  // carry the flat rung of 1+1/3px (4 thirds per channel).
   TEST_ASSERT_EQUAL_INT(0, crt_ca_shift3(100, 113, 200, 228));
-  TEST_ASSERT_EQUAL_INT(8, crt_ca_shift3(0, 0, 200, 228));
-  TEST_ASSERT_EQUAL_INT(8, crt_ca_shift3(199, 227, 200, 228));
+  TEST_ASSERT_EQUAL_INT(4, crt_ca_shift3(0, 0, 200, 228));
+  TEST_ASSERT_EQUAL_INT(4, crt_ca_shift3(199, 227, 200, 228));
   // Mid-edge cells land in the middle band (1+1/3 px = 4 thirds), monotone out.
   TEST_ASSERT_EQUAL_INT(4, crt_ca_shift3(0, 113, 200, 228));
   TEST_ASSERT_TRUE(crt_ca_shift3(190, 113, 200, 228) >= crt_ca_shift3(160, 113, 200, 228));
@@ -4074,7 +4073,7 @@ void test_crt_ca_ladder_should_be_monotone_and_mirror_symmetric(void) {
     int prev = crt_ca_shift3(0, y, 200, 228);
     for (int x = 0; x < 200; x++) {
       int s = crt_ca_shift3(x, y, 200, 228);
-      TEST_ASSERT_TRUE(s == 0 || s == 4 || s == 8);
+      TEST_ASSERT_TRUE(s == 0 || s == 4);
       TEST_ASSERT_EQUAL_INT(s, crt_ca_shift3(199 - x, y, 200, 228));
       TEST_ASSERT_EQUAL_INT(s, crt_ca_shift3(x, 227 - y, 200, 228));
       if (x <= 100) {
@@ -4131,11 +4130,11 @@ void test_crt_pure_geometry_should_match_the_spec(void) {
     }
   }
 
-  // CA: zero at the centre, 8 thirds (2+2/3px per channel) at the corners,
-  // the corners, monotone along x.
+  // CA: zero at the centre, 4 thirds (1+1/3px per channel) at the corners,
+  // monotone along x.
   TEST_ASSERT_EQUAL_INT(0, crt_ca_shift3(100, 113, 200, 228));
-  TEST_ASSERT_EQUAL_INT(8, crt_ca_shift3(0, 0, 200, 228));
-  TEST_ASSERT_EQUAL_INT(8, crt_ca_shift3(199, 227, 200, 228));
+  TEST_ASSERT_EQUAL_INT(4, crt_ca_shift3(0, 0, 200, 228));
+  TEST_ASSERT_EQUAL_INT(4, crt_ca_shift3(199, 227, 200, 228));
   TEST_ASSERT_TRUE(crt_ca_shift3(190, 113, 200, 228) >= crt_ca_shift3(160, 113, 200, 228));
 
   // Vignette: black boundary, full brightness outside the depth, rising

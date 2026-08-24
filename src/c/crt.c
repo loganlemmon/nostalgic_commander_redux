@@ -61,14 +61,15 @@ int crt_warp_sx(int x, int y, int w, int h) {
   return ((w - 1) * 65536 + dx * crt_warp_q16(x, y, w, h) + 65536) >> 17;
 }
 
-// Horizontal CA rung from the squared Q8 radius (units: xq + yq from
+// Horizontal CA from the squared Q8 radius (units: xq + yq from
 // crt_ca_shift3), returning per-channel displacement in THIRDS of a pixel:
-// 0 / 4 / 8 = 0 / 1+1/3 / 2+2/3 px. Thirds because the pass now samples
-// channels fractionally (two weighted taps) instead of copying whole
-// neighbours — see stage 1 in crt_apply_framebuffer. Zone boundaries squared
-// once: rq ≥ R ⇔ xq+yq ≥ ceil(R²/256) — so no per-pixel sqrt is needed.
+// 0 inside the dead zone, a flat 4 (1+1/3 px) outside. Thirds because the
+// pass now samples channels fractionally (two weighted taps) instead of
+// copying whole neighbours — see stage 1 in crt_apply_framebuffer. Zone
+// boundary squared once: rq ≥ R ⇔ xq+yq ≥ ceil(R²/256) — so no per-pixel
+// sqrt is needed.
 static int crt_ca_t3_h2(int xy_sum) {
-  return xy_sum < CRT_CA_R2_X2Q8 ? 0 : (xy_sum < CRT_CA_R3_X2Q8 ? 4 : 8);
+  return xy_sum < CRT_CA_R2_X2Q8 ? 0 : 4;
 }
 // Vertical wider zones, 1px max, same formulation.
 static int crt_ca_shift_v2(int xy_sum) {
@@ -223,8 +224,8 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
         if (pass == 0 && ry > (h - 1) / 2) ry = y;
         if (pass == 1 && ry <= (h - 1) / 2) ry = y;
         // Both taps of a channel come from the same (valid) ring ROW; clamp
-        // the COLUMNS — at max strike the right half reaches q = 8+1+9 = 18
-        // (rung + sign fix + 3·boost) → j = 6, and the taps land on the same
+        // the COLUMNS — at max strike the right half reaches q = 4+1+9 = 14
+        // (rung + sign fix + 3·boost) → j = 4, and the taps land on the same
         // edge column and the weighted sample degenerates to a plain copy.
         if (rt0 < 0) rt0 = 0;
         if (rt0 >= w) rt0 = w - 1;
