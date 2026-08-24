@@ -3857,37 +3857,55 @@ void test_crt_vignette_light_bg_should_fall_off_gradually(void) {
   // dark-theme smoothstep: dot DENSITY carries the darkening. Level-2 fields
   // never render a 0 mid-band (dither spans {1,2} until f dips under 128 at
   // depth 2), the speckle thickens inward-to-outward, the rim itself goes
-  // black, and the field is untouched from depth 11 on. Windows below dodge
-  // the warp: dest x samples source ≈x−4 near the left edge (mirror on the
-  // right), so dest-side bands start ~4px wider than source depths.
+  // black, and the field is untouched from depth 11 on. The vignette runs in
+  // CONTENT space (applied before curvature, so it rides the warp), with the
+  // vertical depth pre-stretched BAND_PX-scaled — the warp stretches the side bands to
+  // ~21 display px on its own, so all four sides land at ~21px.
   s_active_theme = &s_theme_dialog;  // LightGray field
   s_settings_crt = 1;
   s_flash_phase = CRT_FLASH_IDLE;
   memset(mock_framebuffer, 0xEA, sizeof(mock_framebuffer));  // opaque LightGray
   crt_update_proc(NULL, s_fake_ctx);
 
-  uint8_t* row = &mock_framebuffer[113 * 200];  // mid-height: source depth == x
+  uint8_t* row = &mock_framebuffer[113 * 200];  // mid-height; warp shifts
+                                                // content inward ~1-2px here
   TEST_ASSERT_EQUAL_HEX8(0xC0, row[0]);         // rim itself black
-  for (int x = 7; x < 193; x++) {               // mid-band: no channel dies
+  for (int x = 7; x < 193; x++) {               // LUT depth >= 3: no channel dies
     TEST_ASSERT_TRUE(((row[x] >> 4) & 3) >= 1);
     TEST_ASSERT_TRUE(((row[x] >> 2) & 3) >= 1);
     TEST_ASSERT_TRUE((row[x] & 3) >= 1);
   }
   int speckled = 0;  // dark-grey dots exist in the falloff band
-  for (int x = 3; x <= 12; x++) {
-    if (row[x] == 0xD5) speckled++;
+  for (int x = 2; x <= 12; x++) {
+    if (mock_framebuffer[112 * 200 + x] == 0xD5) speckled++;
   }
   TEST_ASSERT_TRUE(speckled > 0);
-  for (int x = 16; x <= 183; x++) {  // interior untouched
-    TEST_ASSERT_EQUAL_HEX8(0xEA, row[x]);
+  for (int x = 18; x <= 181; x++) {        // interior untouched (LUT depth >= 11,
+    TEST_ASSERT_EQUAL_HEX8(0xEA, row[x]);  // displayed at ~depth+2 by the warp)
+  }
+
+  // Vertically the warp doesn't pull, so the scaled BAND_PX-scaled band shows at
+  // display depth ~1:1. Probe dot lives near (97,12): content col 96 has
+  // Bayer t=0 at LUT depth 9 (the threshold is column-mirrored, hence 96 not
+  // 100) and the warp blend at dest 97 keeps it level-1.
+  TEST_ASSERT_EQUAL_HEX8(0xC0, mock_framebuffer[100]);  // (100,0)
+  int vspeckled = 0;
+  for (int y = 12; y <= 14; y++) {
+    for (int x = 92; x <= 104; x++) {
+      if (mock_framebuffer[y * 200 + x] == 0xD5) vspeckled++;
+    }
+  }
+  TEST_ASSERT_TRUE(vspeckled > 0);
+  for (int y = 20; y <= 207; y++) {  // light LUT plateaus at d' >= 11
+    TEST_ASSERT_EQUAL_HEX8(0xEA, mock_framebuffer[y * 200 + 100]);
   }
 }
 
 void test_crt_vignette_dark_gray_field_should_graduate_by_density(void) {
   // Navigator's DarkGray field sits at level 1: its only darker shade IS
   // black, so the falloff is speckle density alone — heavy at the rim,
-  // thinning inward, gone from depth 11 (windows dodge the warp as in the
-  // dialog test above).
+  // thinning inward, gone from LUT depth 11 (content-space vignette keys
+  // content columns, so the warp displays the field pure from ~x=18).
   s_active_theme = &s_theme_navigator;
   s_settings_crt = 1;
   s_flash_phase = CRT_FLASH_IDLE;
@@ -3901,8 +3919,21 @@ void test_crt_vignette_dark_gray_field_should_graduate_by_density(void) {
     if (row[x] == 0xC0) black_dots++;
   }
   TEST_ASSERT_TRUE(black_dots > 0);
-  for (int x = 16; x <= 183; x++) {
+  for (int x = 18; x <= 181; x++) {
     TEST_ASSERT_EQUAL_HEX8(0xD5, row[x]);
+  }
+  // Vertical: warp doesn't pull; content col 96 has Bayer t=0 at LUT depth
+  // 9 (column-mirrored threshold — 96, not 100) → black dot under BAND_PX-scaled,
+  // kept by the warp blend around dest (97,12).
+  int vdots = 0;
+  for (int y = 12; y <= 14; y++) {
+    for (int x = 92; x <= 104; x++) {
+      if (mock_framebuffer[y * 200 + x] == 0xC0) vdots++;
+    }
+  }
+  TEST_ASSERT_TRUE(vdots > 0);
+  for (int y = 20; y <= 207; y++) {
+    TEST_ASSERT_EQUAL_HEX8(0xD5, mock_framebuffer[y * 200 + 100]);
   }
 }
 
@@ -3917,6 +3948,28 @@ void test_crt_vignette_dark_bg_should_still_dim_to_black(void) {
   crt_update_proc(NULL, s_fake_ctx);
   TEST_ASSERT_EQUAL_HEX8(0xC0, mock_framebuffer[0]);
   TEST_ASSERT_EQUAL_HEX8(0xC0, mock_framebuffer[228 * 200 - 1]);
+}
+
+void test_crt_warp_rim_should_be_mirror_symmetric(void) {
+  // The out-of-range clamp must replicate the edge column with fr=0 on BOTH
+  // sides: with only sx clamped the left rim blended the edge column with
+  // the (still dithered) col 1 while the right rim self-replicated — a
+  // visible grey bleed in the left corners on light fields. Dest columns
+  // x<=4 all clamp on both sides at every row (pull >= 5 there).
+  const WatchTheme* rims[] = {&s_theme_dialog, &s_theme_navigator, &s_theme_panel};
+  for (int ti = 0; ti < 3; ti++) {
+    s_active_theme = rims[ti];
+    s_settings_crt = 1;
+    s_flash_phase = CRT_FLASH_IDLE;
+    memset(mock_framebuffer, 0xEA, sizeof(mock_framebuffer));
+    crt_update_proc(NULL, s_fake_ctx);
+    for (int y = 0; y < 228; y++) {
+      for (int x = 0; x <= 4; x++) {
+        TEST_ASSERT_EQUAL_HEX8(mock_framebuffer[y * 200 + (199 - x)],
+                               mock_framebuffer[y * 200 + x]);
+      }
+    }
+  }
 }
 
 void test_crt_ca_should_pull_red_from_the_left(void) {
@@ -4155,25 +4208,22 @@ void test_crt_ca_ladder_should_be_monotone_and_mirror_symmetric(void) {
   }
 }
 
-void test_crt_warp_should_pull_the_top_row_inward(void) {
-  // Row 20 is 4px inside the vignette's full-brightness plateau (fade 16px
-  // deep since the LUT retune), with radial magnification ≈2.7% at the bar
-  // columns. White stripes at columns 54..63 and the mirrored 136..145: the warp pulls their outer
-  // edge pixels off the stripes while their centres survive (CA is white-transparent well inside a
-  // stripe).
+void test_crt_warp_should_pull_a_stripe_inward(void) {
+  // Row 30 sits on the vignette plateau (vertical depth >= 16 under the
+  // 16:28 stretch). White stripes at columns 54..63 and the mirrored 136..145: the
+  // warp pulls their outer edge pixels off the stripes while their centres
+  // survive (CA is white-transparent well inside a stripe).
   s_settings_crt = 1;
   memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));
   // A green-only bar up to col 63: geometrically pinned by the warp, immune
   // to CA (G never resamples). Assert the move on G alone.
-  for (int x = 54; x <= 63; x++) mock_framebuffer[20 * 200 + x] = 0x0C;
-  for (int x = 136; x <= 145; x++) mock_framebuffer[20 * 200 + x] = 0x0C;
+  for (int x = 54; x <= 63; x++) mock_framebuffer[30 * 200 + x] = 0x0C;
+  for (int x = 136; x <= 145; x++) mock_framebuffer[30 * 200 + x] = 0x0C;
   crt_update_proc(NULL, s_fake_ctx);
 
-  // Row 20 mid-column magnification ≈ 3.2% (was a 3px inset).
-  TEST_ASSERT_EQUAL_INT(67612, crt_warp_q16(100, 20, 200, 228));
-  TEST_ASSERT_EQUAL_HEX8(3, (mock_framebuffer[20 * 200 + 56] >> 2) & 3);  // stripe centre
-  TEST_ASSERT_TRUE(((mock_framebuffer[20 * 200 + 54] >> 2) & 3) < 3);     // left edge pulled in
-  TEST_ASSERT_TRUE(((mock_framebuffer[20 * 200 + 145] >> 2) & 3) < 3);    // right edge, mirroring
+  TEST_ASSERT_EQUAL_HEX8(3, (mock_framebuffer[30 * 200 + 56] >> 2) & 3);  // stripe centre
+  TEST_ASSERT_TRUE(((mock_framebuffer[30 * 200 + 54] >> 2) & 3) < 3);     // left edge pulled in
+  TEST_ASSERT_TRUE(((mock_framebuffer[30 * 200 + 145] >> 2) & 3) < 3);    // right edge, mirroring
 }
 
 void test_crt_pure_geometry_should_match_the_spec(void) {
@@ -4204,10 +4254,11 @@ void test_crt_pure_geometry_should_match_the_spec(void) {
   TEST_ASSERT_EQUAL_INT(4, crt_ca_shift3(199, 227, 200, 228));
   TEST_ASSERT_TRUE(crt_ca_shift3(190, 113, 200, 228) >= crt_ca_shift3(160, 113, 200, 228));
 
-  // Vignette: black boundary, full brightness outside the depth, rising
-  // inward — the gamma-lifted midpoint sits past the half-way mark.
+  // Vignette: black boundary, full brightness outside the 21px band, rising
+  // inward — the gamma-lifted midpoint sits past the half-way mark. (BAND_PX-scaled
+  // depth scale: display 21px ↔ LUT depth 16.)
   TEST_ASSERT_EQUAL_INT(0, crt_vignette_q8(0, 113, 200, 228));
-  TEST_ASSERT_EQUAL_INT(256, crt_vignette_q8(CRT_VIGNETTE_PX, 113, 200, 228));
+  TEST_ASSERT_EQUAL_INT(256, crt_vignette_q8(CRT_VIGNETTE_BAND_PX, 113, 200, 228));
   TEST_ASSERT_EQUAL_INT(256, crt_vignette_q8(100, 113, 200, 228));
   int mid = crt_vignette_q8(CRT_VIGNETTE_PX / 2, 113, 200, 228);
   TEST_ASSERT_TRUE(mid > 128 && mid < 200);
@@ -4659,6 +4710,7 @@ int main(void) {
   RUN_TEST(test_crt_vignette_light_bg_should_fall_off_gradually);
   RUN_TEST(test_crt_vignette_dark_gray_field_should_graduate_by_density);
   RUN_TEST(test_crt_vignette_dark_bg_should_still_dim_to_black);
+  RUN_TEST(test_crt_warp_rim_should_be_mirror_symmetric);
   RUN_TEST(test_crt_ca_should_pull_red_from_the_left);
   RUN_TEST(test_crt_ca_zero_point_should_mirror_ghosts_about_the_line);
   RUN_TEST(test_crt_strike_should_stack_ca_boost_in_whole_pixels);
@@ -4667,7 +4719,7 @@ int main(void) {
   RUN_TEST(test_crt_ca_boundary_row_should_not_read_across_halves);
   RUN_TEST(test_crt_ca_onset_should_cut_at_the_dead_zone);
   RUN_TEST(test_crt_ca_ladder_should_be_monotone_and_mirror_symmetric);
-  RUN_TEST(test_crt_warp_should_pull_the_top_row_inward);
+  RUN_TEST(test_crt_warp_should_pull_a_stripe_inward);
   RUN_TEST(test_crt_pure_geometry_should_match_the_spec);
   RUN_TEST(test_crt_warp_should_spread_steps_across_rows);
   RUN_TEST(test_crt_warp_should_blend_instead_of_dropping_columns);

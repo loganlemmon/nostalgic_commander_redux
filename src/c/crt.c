@@ -7,7 +7,6 @@
 // from the framebuffer. Emery-only build; the face targets no B&W platform.
 
 #define GCOLOR8_ALPHA 0xC0
-#define GCOLOR8_OPAQUE_BLACK 0xC0
 
 // Current warm-up phase, or CRT_FLASH_IDLE. Advanced by the self-re-arming
 // flash tick; written by crt_backlight_handler on backlight-on.
@@ -87,10 +86,15 @@ int crt_ca_shift3(int x, int y, int w, int h) {
 
 // Distance toward the nearest frame edge, counting around the corner arcs:
 // inside the corner square the boundary is the arc, elsewhere the straight
-// edge. 0 = boundary itself, growing inward.
+// edge. 0 = boundary itself, growing inward. Only the VERTICAL depth is
+// pre-stretched 16:28: the warp stretches the horizontal bands from 16
+// content px to ~21 display px on its own, and the wider read won on
+// hardware — scaling the untouched axis up matches it instead of shrinking
+// the sides back. (The falloff sits in content space, so its width is
+// measured before the warp's stretch.)
 static int crt_edge_distance(int x, int y, int w, int h) {
   int ex = x < w - 1 - x ? x : w - 1 - x;
-  int ey = y < h - 1 - y ? y : h - 1 - y;
+  int ey = (y < h - 1 - y ? y : h - 1 - y) * CRT_VIGNETTE_PX / CRT_VIGNETTE_BAND_PX;
   if (ex < CRT_CORNER_RADIUS && ey < CRT_CORNER_RADIUS) {
     int rx = CRT_CORNER_RADIUS - ex;
     int ry = CRT_CORNER_RADIUS - ey;
@@ -113,10 +117,12 @@ static const uint16_t s_vignette_q8[CRT_VIGNETTE_PX + 1] = {
 // half its levels across a bright field — on a 4-level panel that reads as
 // black pepper, not a falloff. Ease-in (1-(1-d/D)^4) keeps the field ~full
 // to depth ~9, ramps speckle density, and goes black only at the rim — a
-// bezel ring instead of dirt. Level-2 fields can't render 0 before depth 2
-// (f<128); level-1 fields (Navigator) graduate by black-dot density alone.
+// bezel ring instead of dirt. Depths 1-3 run hot on black-dot density
+// (87/50/19%) so the vertical bands — which have no warp clamp columns
+// feeding them solid black — still read as a proper rim. Level-1 fields
+// (Navigator) graduate by dot density alone.
 static const uint16_t s_vignette_q8_light[CRT_VIGNETTE_PX + 1] = {
-    0, 58, 106, 145, 175, 199, 217, 230, 240, 247, 253, 256, 256, 256, 256, 256, 256};
+    0, 20, 64, 110, 145, 175, 199, 217, 230, 240, 247, 256, 256, 256, 256, 256, 256};
 
 // Same falloff without per-pixel arithmetic (the LUTs above carry it); the
 // theme's bg_is_light picks the curve.
@@ -269,22 +275,14 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
 
       // 2) Vignette + dither on the CA'd row — dimming in content space, so
       //    the curvature pass below bends the already-darkened rim with the
-      //    image. Mirror-symmetric Bayer thresholds keep both rims identical.
+      //    image (adherent to the curvature; its horizontal stretch is
+      //    pre-compensated on the vertical axis by the 16:28 depth scale).
+      //    Mirror-symmetric Bayer thresholds keep both rims identical.
       int ey = y < h - 1 - y ? y : h - 1 - y;
       int ty = ey & 3;
-      bool corner_row = ey < CRT_CORNER_RADIUS;
       for (int x = 0; x < w; x++) {
         int ex = x < w - 1 - x ? x : w - 1 - x;
-        int d;
-        if (corner_row && ex < CRT_CORNER_RADIUS) {
-          int rx = CRT_CORNER_RADIUS - ex;
-          int ry = CRT_CORNER_RADIUS - ey;
-          d = CRT_CORNER_RADIUS - isqrt_floor(rx * rx + ry * ry);
-          if (d < 0) d = 0;
-        } else {
-          d = ex < ey ? ex : ey;
-        }
-        int f = crt_vignette_q8_from_depth(d);
+        int f = crt_vignette_q8(x, y, w, h);
         uint8_t p = row_ca[x];
         int t = s_bayer4[ty * 4 + (ex & 3)];
         int r = dither_channel((p >> 4) & 3, f, t);
@@ -314,13 +312,21 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
         int sn = (w - 1) * 65536 + dx * mul16 + 65536;  // sx*131072 + half
         int S = sn - 65536;                             // exact warp position, Q17
         int sx = (S >> 17) + row_off;                   // strike stays whole-pixel
-        if (sx < 0 || sx >= w) {
-          row[x] = GCOLOR8_OPAQUE_BLACK;
-          continue;
+        int fr = (S >> 9) & 0xFF;                       // 0..255, weight toward sx+1
+        // Out-of-range replicates the nearest column WITHOUT the inward
+        // blend: clamping sx alone left fr live, so the left rim blended the
+        // edge column with the (still dithered) column 1 while the right rim
+        // self-replicated — an asymmetric grey bleed at the corners.
+        if (sx < 0) {
+          sx = 0;
+          fr = 0;
         }
-        int fr = (S >> 9) & 0xFF;  // 0..255, weight toward sx+1
+        if (sx >= w - 1) {  // w-1, not w: kill the fraction symmetrically
+          sx = w - 1;
+          fr = 0;
+        }
         int sx1 = sx + 1;
-        if (sx1 >= w) sx1 = w - 1;
+        if (sx1 >= w) sx1 = sx;
         uint8_t p0 = row_ca[sx], p1 = row_ca[sx1];
         int r = ((256 - fr) * ((p0 >> 4) & 3) + fr * ((p1 >> 4) & 3) + 128) >> 8;
         int g = ((256 - fr) * ((p0 >> 2) & 3) + fr * ((p1 >> 2) & 3) + 128) >> 8;

@@ -5,11 +5,13 @@
 // The CRT effect lives entirely here: a full-screen overlay layer stacked
 // above the clock whose update proc captures the framebuffer (the public
 // graphics_capture_frame_buffer API) and runs a per-pixel pass — a software
-// "shader". Stage order: 1) chromatic aberration, 2) vignette + dither (dims
-// the image in content space so the rim bends with it; light-background
+// "shader". Stage order: 1) chromatic aberration, 2) vignette + dither (in
+// content space, so the darkening bends WITH the curvature; light-background
 // themes take a steeper ease-in LUT — dot density over shade, black only at
-// the rim), 3) curvature — the pincushion warp, and the degauss strike's row
-// jitter rides the same sampling stage. The toggle gates the pass; off means the proc returns
+// the rim), 3) curvature — the pincushion warp. Vertical vignette depth is
+// pre-stretched 16:28 so all four display bands land at ~21px after the
+// warp's horizontal stretch. The degauss strike's row jitter rides the warp's
+// sampling stage. The toggle gates the pass; off means the proc returns
 // before capturing, so the effect costs exactly nothing.
 //
 // main.c owns the layer's lifecycle (create/stack/destroy), like the canvas;
@@ -21,10 +23,15 @@ extern Layer* s_crt_layer;
 // elliptical Q8 xq+yq the CA zones also use). K=12 ≈ 4.7px of pull at a
 // mid-edge (r²=256) — dialed in on hardware after the 16px vignette stopped
 // the bent rim from eating the side frames — smoothly more toward
-// the corners. The vignette darkens within VIGNETTE_PX of the nearest edge
-// (counted around the corner arcs) — which is also what hides the warp's
-// outermost black-clip columns.
+// the corners. The vignette darkens within VIGNETTE_PX content pixels of the
+// nearest edge (counted around the corner arcs) — except vertically, where
+// the depth is pre-stretched 16:28: the warp stretches the horizontal bands
+// to ~21 display px on its own, and the wider read won on hardware.
 #define CRT_VIGNETTE_PX 16
+// Vertical band depth in display px. No clamp columns exist vertically
+// (the warp is horizontal-only), so the band needs to run deeper than the
+// sides' 16 content px to read equally dark.
+#define CRT_VIGNETTE_BAND_PX 28
 #define CRT_CORNER_RADIUS 14
 #define CRT_WARP_R2_K 12
 // CA zones by elliptical radius (Q8 of r²-summated terms; mid-edges ≈ 256,
@@ -58,8 +65,9 @@ int crt_vignette_q8(int x, int y, int w, int h);
 int crt_strike_offset(int y, int flash_phase);
 // Radial warp magnification in Q16 at (x,y): 65536 = identity, growing with
 // the elliptical squared radius. Side content warps too (deliberate — a
-// curved tube bows on all edges); the outermost ~4 columns clip to black at
-// mid-height, exactly where the vignette is already black.
+// curved tube bows on all edges); the outermost ~4 columns' sources run off
+// the frame at mid-height and replicate the edge column — which the vignette
+// has already darkened to the rim's level anyway.
 int crt_warp_q16(int x, int y, int w, int h);
 // Source column for dest (x,y) under the warp alone (no strike jitter).
 int crt_warp_sx(int x, int y, int w, int h);
