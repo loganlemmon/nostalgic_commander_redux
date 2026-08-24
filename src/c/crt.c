@@ -204,7 +204,7 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
       //    fringe samples ring rows toward/away from the centreline.
       for (int x = 0; x < w; x++) {
         bool left = x * 2 < w - 1;
-        // Horizontal pull in THIRDS: the rung (0/4/8), plus the element-offset
+        // Horizontal pull in THIRDS: the rung (0/4), plus the element-offset
         // correction and the strike boost in whole pixels. The correction does
         // NOT mirror: the RGB stripe puts R 1/3px left (B 1/3px right) of its
         // pixel centre on BOTH halves, so the sign follows the half, not the
@@ -214,7 +214,8 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
         // converge: at the centre the rasters land on the content.
         int q = crt_ca_t3_h2(s_ca_xq[x] + yterm) + (left ? -1 : 1) + 3 * ca_boost;
         int j = (q - (q < 0 ? 2 : 0)) / 3;  // floor(q/3); q >= -1 by construction
-        int f = q - 3 * j;                  // 0..2 — all three occur across current rungs
+        // 0..2 — 1 unreachable: rung 4 + ±1 correction + 3k boost ⇒ q ≢ 1 (mod 3).
+        int f = q - 3 * j;  // blend weight toward the farther tap
         int s_v = crt_ca_shift_v2(s_ca_xq[x] + yterm);
 
         bool top = y * 2 < h - 1;
