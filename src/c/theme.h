@@ -14,6 +14,10 @@ typedef struct {
   GColor status_green;
   GColor status_yellow;
   GColor status_red;
+  // Field polarity for the CRT vignette: light fields (the grey themes)
+  // take an ease-in falloff — speckle density over shade, black only at the
+  // rim — since a smoothstep sweep across a bright field reads as pepper.
+  bool bg_is_light;
 } WatchTheme;
 
 extern const WatchTheme* s_active_theme;

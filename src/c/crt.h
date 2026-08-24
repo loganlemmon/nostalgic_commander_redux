@@ -6,9 +6,10 @@
 // above the clock whose update proc captures the framebuffer (the public
 // graphics_capture_frame_buffer API) and runs a per-pixel pass — a software
 // "shader". Stage order: 1) chromatic aberration, 2) vignette + dither (dims
-// the image in content space so the rim bends with it), 3) curvature — the
-// pincushion warp, and the degauss strike's row jitter rides the same
-// sampling stage. The toggle gates the pass; off means the proc returns
+// the image in content space so the rim bends with it; light-background
+// themes take a steeper ease-in LUT — dot density over shade, black only at
+// the rim), 3) curvature — the pincushion warp, and the degauss strike's row
+// jitter rides the same sampling stage. The toggle gates the pass; off means the proc returns
 // before capturing, so the effect costs exactly nothing.
 //
 // main.c owns the layer's lifecycle (create/stack/destroy), like the canvas;

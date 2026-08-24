@@ -3852,6 +3852,73 @@ void test_crt_vignette_should_dither_the_falloff(void) {
   TEST_ASSERT_TRUE(darkened >= 7);
 }
 
+void test_crt_vignette_light_bg_should_fall_off_gradually(void) {
+  // Light backgrounds take a quartic ease-in falloff instead of the
+  // dark-theme smoothstep: dot DENSITY carries the darkening. Level-2 fields
+  // never render a 0 mid-band (dither spans {1,2} until f dips under 128 at
+  // depth 2), the speckle thickens inward-to-outward, the rim itself goes
+  // black, and the field is untouched from depth 11 on. Windows below dodge
+  // the warp: dest x samples source ≈x−4 near the left edge (mirror on the
+  // right), so dest-side bands start ~4px wider than source depths.
+  s_active_theme = &s_theme_dialog;  // LightGray field
+  s_settings_crt = 1;
+  s_flash_phase = CRT_FLASH_IDLE;
+  memset(mock_framebuffer, 0xEA, sizeof(mock_framebuffer));  // opaque LightGray
+  crt_update_proc(NULL, s_fake_ctx);
+
+  uint8_t* row = &mock_framebuffer[113 * 200];  // mid-height: source depth == x
+  TEST_ASSERT_EQUAL_HEX8(0xC0, row[0]);         // rim itself black
+  for (int x = 7; x < 193; x++) {               // mid-band: no channel dies
+    TEST_ASSERT_TRUE(((row[x] >> 4) & 3) >= 1);
+    TEST_ASSERT_TRUE(((row[x] >> 2) & 3) >= 1);
+    TEST_ASSERT_TRUE((row[x] & 3) >= 1);
+  }
+  int speckled = 0;  // dark-grey dots exist in the falloff band
+  for (int x = 3; x <= 12; x++) {
+    if (row[x] == 0xD5) speckled++;
+  }
+  TEST_ASSERT_TRUE(speckled > 0);
+  for (int x = 16; x <= 183; x++) {  // interior untouched
+    TEST_ASSERT_EQUAL_HEX8(0xEA, row[x]);
+  }
+}
+
+void test_crt_vignette_dark_gray_field_should_graduate_by_density(void) {
+  // Navigator's DarkGray field sits at level 1: its only darker shade IS
+  // black, so the falloff is speckle density alone — heavy at the rim,
+  // thinning inward, gone from depth 11 (windows dodge the warp as in the
+  // dialog test above).
+  s_active_theme = &s_theme_navigator;
+  s_settings_crt = 1;
+  s_flash_phase = CRT_FLASH_IDLE;
+  memset(mock_framebuffer, 0xD5, sizeof(mock_framebuffer));  // opaque DarkGray
+  crt_update_proc(NULL, s_fake_ctx);
+
+  uint8_t* row = &mock_framebuffer[113 * 200];
+  TEST_ASSERT_EQUAL_HEX8(0xC0, row[0]);
+  int black_dots = 0;
+  for (int x = 1; x <= 12; x++) {
+    if (row[x] == 0xC0) black_dots++;
+  }
+  TEST_ASSERT_TRUE(black_dots > 0);
+  for (int x = 16; x <= 183; x++) {
+    TEST_ASSERT_EQUAL_HEX8(0xD5, row[x]);
+  }
+}
+
+void test_crt_vignette_dark_bg_should_still_dim_to_black(void) {
+  // Regression guard: dark themes keep the to-black falloff — the bg is
+  // already 0 there, so grain is dark-on-black and the crushed rim is the
+  // intended look.
+  s_active_theme = &s_theme_panel;  // DukeBlue — dark
+  s_settings_crt = 1;
+  s_flash_phase = CRT_FLASH_IDLE;
+  memset(mock_framebuffer, 0xFF, sizeof(mock_framebuffer));
+  crt_update_proc(NULL, s_fake_ctx);
+  TEST_ASSERT_EQUAL_HEX8(0xC0, mock_framebuffer[0]);
+  TEST_ASSERT_EQUAL_HEX8(0xC0, mock_framebuffer[228 * 200 - 1]);
+}
+
 void test_crt_ca_should_pull_red_from_the_left(void) {
   s_settings_crt = 1;
   memset(mock_framebuffer, 0xC0, sizeof(mock_framebuffer));  // opaque black
@@ -4589,6 +4656,9 @@ int main(void) {
   RUN_TEST(test_crt_should_not_capture_the_framebuffer_while_disabled);
   RUN_TEST(test_crt_should_round_the_corners_and_keep_the_centre);
   RUN_TEST(test_crt_vignette_should_dither_the_falloff);
+  RUN_TEST(test_crt_vignette_light_bg_should_fall_off_gradually);
+  RUN_TEST(test_crt_vignette_dark_gray_field_should_graduate_by_density);
+  RUN_TEST(test_crt_vignette_dark_bg_should_still_dim_to_black);
   RUN_TEST(test_crt_ca_should_pull_red_from_the_left);
   RUN_TEST(test_crt_ca_zero_point_should_mirror_ghosts_about_the_line);
   RUN_TEST(test_crt_strike_should_stack_ca_boost_in_whole_pixels);

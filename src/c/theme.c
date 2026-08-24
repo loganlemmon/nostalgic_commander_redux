@@ -14,7 +14,8 @@ const WatchTheme s_theme_panel = {.center_bg = GColorDukeBlue,
                                   .status_ink = GColorBlack,
                                   .status_green = GColorScreaminGreen,
                                   .status_yellow = GColorIcterine,
-                                  .status_red = GColorSunsetOrange};
+                                  .status_red = GColorSunsetOrange,
+                                  .bg_is_light = false};
 
 // The same panel in shadow. With 16 colors and no way to darken one, DOS-era
 // Turbo Vision faked a dimmed panel by drawing it grey-on-black. Three grey
@@ -28,7 +29,8 @@ const WatchTheme s_theme_shadow = {.center_bg = GColorBlack,
                                    .status_ink = GColorBlack,
                                    .status_green = GColorScreaminGreen,
                                    .status_yellow = GColorIcterine,
-                                   .status_red = GColorSunsetOrange};
+                                   .status_red = GColorSunsetOrange,
+                                   .bg_is_light = false};
 
 // The Turbo Vision dialog box — text attribute 0x70, black on light grey, the
 // palette NC used for its own menus. On a light ground everything drawn as text
@@ -45,7 +47,8 @@ const WatchTheme s_theme_dialog = {.center_bg = GColorLightGray,
                                    .status_ink = GColorWhite,
                                    .status_green = GColorIslamicGreen,
                                    .status_yellow = GColorWindsorTan,
-                                   .status_red = GColorDarkCandyAppleRed};
+                                   .status_red = GColorDarkCandyAppleRed,
+                                   .bg_is_light = true};
 
 // DOS Navigator's default screen as it actually renders: dark grey ground,
 // light text and chrome, dim grey secondary readouts, yellow hotkey marks.
@@ -60,7 +63,8 @@ const WatchTheme s_theme_navigator = {.center_bg = GColorDarkGray,
                                       .status_ink = GColorBlack,
                                       .status_green = GColorScreaminGreen,
                                       .status_yellow = GColorIcterine,
-                                      .status_red = GColorSunsetOrange};
+                                      .status_red = GColorSunsetOrange,
+                                      .bg_is_light = true};
 
 const WatchTheme* determine_theme(int theme_setting) {
   switch (theme_setting) {

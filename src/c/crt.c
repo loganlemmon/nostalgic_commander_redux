@@ -109,9 +109,20 @@ static int crt_edge_distance(int x, int y, int w, int h) {
 static const uint16_t s_vignette_q8[CRT_VIGNETTE_PX + 1] = {
     0, 11, 28, 48, 70, 92, 114, 136, 158, 178, 196, 213, 227, 239, 248, 254, 256};
 
-// Same falloff without per-pixel arithmetic (the LUT above carries it).
+// Light backgrounds swap the curve, not the depth: the smoothstep sweeps
+// half its levels across a bright field — on a 4-level panel that reads as
+// black pepper, not a falloff. Ease-in (1-(1-d/D)^4) keeps the field ~full
+// to depth ~9, ramps speckle density, and goes black only at the rim — a
+// bezel ring instead of dirt. Level-2 fields can't render 0 before depth 2
+// (f<128); level-1 fields (Navigator) graduate by black-dot density alone.
+static const uint16_t s_vignette_q8_light[CRT_VIGNETTE_PX + 1] = {
+    0, 58, 106, 145, 175, 199, 217, 230, 240, 247, 253, 256, 256, 256, 256, 256, 256};
+
+// Same falloff without per-pixel arithmetic (the LUTs above carry it); the
+// theme's bg_is_light picks the curve.
 static int crt_vignette_q8_from_depth(int d) {
-  return d >= CRT_VIGNETTE_PX ? 256 : s_vignette_q8[d];
+  if (d >= CRT_VIGNETTE_PX) return 256;
+  return s_active_theme->bg_is_light ? s_vignette_q8_light[d] : s_vignette_q8[d];
 }
 
 int crt_vignette_q8(int x, int y, int w, int h) {
