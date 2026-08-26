@@ -79,9 +79,14 @@ void crt_backlight_handler(bool on);
 
 // Synthesises the degauss woomp to PCM once, then plays it via the speaker
 // API. Silent when the speaker is muted by system preference (including
-// Quiet Time when the user set it to mute).
+// Quiet Time when the user set it to mute), or while the face is covered by
+// a notification/alarm/modal/quick view — see the crt_app_focus_* handlers.
 void crt_play_strike_sound(void);
-// Settings push may have flipped the toggle: sync the flash state and mark
+// App Focus service callbacks (subscribed in main.c): track whether
+// anything covers the face. They gate the strike sound only; the visual
+// strike runs regardless.
+void crt_app_focus_will_handler(bool in_focus);
+void crt_app_focus_did_handler(bool in_focus);
 // the overlay dirty; turning off repaints — the OFF frame is painted by the
 // canvas/clock underneath once the background re-dirties, the overlay then
 // paints nothing over it.

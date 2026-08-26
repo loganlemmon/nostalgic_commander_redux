@@ -347,6 +347,8 @@ static void init(void) {
   tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
   battery_state_service_subscribe(battery_callback);
   backlight_service_subscribe(crt_backlight_handler);
+  app_focus_service_subscribe_handlers((AppFocusHandlers){.will_focus = crt_app_focus_will_handler,
+                                                          .did_focus = crt_app_focus_did_handler});
   connection_service_subscribe(
       (ConnectionHandlers){.pebble_app_connection_handler = handle_bluetooth});
 #if defined(PBL_HEALTH)

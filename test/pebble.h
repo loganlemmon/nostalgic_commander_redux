@@ -267,6 +267,13 @@ typedef void (*AppMessageOutboxFailed)(DictionaryIterator* iterator, AppMessageR
                                        void* context);
 typedef void (*AppTimerCallback)(void* data);
 typedef void (*BacklightHandler)(bool on);
+// App Focus API surface used to silence the CRT strike while the face is
+// covered. Spelled as the SDK umbrella header has it.
+typedef void (*AppFocusHandler)(bool in_focus);
+typedef struct {
+  AppFocusHandler will_focus;
+  AppFocusHandler did_focus;
+} AppFocusHandlers;
 // Speaker API surface used by the CRT strike sound. LCD-types stay
 // child-sized: a note row and the waveforms the face picks among.
 #define PACKED
@@ -336,6 +343,7 @@ bool app_timer_reschedule(AppTimer* timer, uint32_t new_timeout_ms);
 void app_timer_cancel(AppTimer* timer);
 void backlight_service_subscribe(BacklightHandler handler);
 void backlight_service_unsubscribe(void);
+void app_focus_service_subscribe_handlers(AppFocusHandlers handlers);
 GBitmap* graphics_capture_frame_buffer(GContext* ctx);
 bool graphics_release_frame_buffer(GContext* ctx, GBitmap* buffer);
 uint8_t* gbitmap_get_data(const GBitmap* bitmap);
@@ -426,6 +434,9 @@ extern int mock_backlight_subscribe_count;
 extern int mock_backlight_unsubscribe_count;
 // The last handler registered; tests drive backlight transitions through it.
 extern BacklightHandler mock_backlight_handler;
+// The last focus handlers registered; tests drive coverage changes through
+// mock_app_focus_handlers.did_focus.
+extern AppFocusHandlers mock_app_focus_handlers;
 // app_timer_register records its last call so tests can fire a delayed
 // callback manually: invoke mock_timer_callback(NULL) and assert the timeout.
 extern int mock_timer_register_count;

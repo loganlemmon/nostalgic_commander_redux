@@ -88,6 +88,7 @@ static void reset_all_state(void) {
   s_flash_phase = CRT_FLASH_IDLE;
   s_flash_timer = NULL;
   s_strike_pending = false;
+  s_app_in_focus = true;
   s_crt_layer = NULL;
   s_canvas_layer = NULL;
   s_main_window = NULL;
@@ -4277,6 +4278,26 @@ void test_crt_sound_should_play_only_when_enabled_and_unmuted(void) {
   TEST_ASSERT_EQUAL_UINT8(CRT_STRIKE_VOLUME, mock_speaker_last_volume);
 }
 
+void test_crt_sound_should_stay_silent_while_the_face_is_covered(void) {
+  s_settings_crt = 1;
+  s_settings_crt_sound = 1;
+
+  // A notification covering the face: will_focus(false) fires as the cover
+  // starts, so backlight-on primes the visual strike but the sound stays off.
+  crt_app_focus_will_handler(false);
+  crt_backlight_handler(true);
+  crt_update_proc(NULL, s_fake_ctx);
+  TEST_ASSERT_EQUAL_INT(0, s_flash_phase);  // visual strike runs regardless
+  TEST_ASSERT_EQUAL_INT(0, mock_speaker_play_tracks_count);
+
+  // Cover fully closed (did_focus is the completed transition): the next
+  // backlight-on is audible again.
+  crt_app_focus_did_handler(true);
+  crt_backlight_handler(true);
+  crt_update_proc(NULL, s_fake_ctx);
+  TEST_ASSERT_EQUAL_INT(1, mock_speaker_play_tracks_count);
+}
+
 void test_crt_strike_pcm_should_thunk_fall_and_never_click(void) {
   // Thunk shape: starts silent, attacks to full in the first n/20, decays —
   // the strike's sound must fit the stock ring (110ms ≤ 128ms measured HW
@@ -4584,6 +4605,7 @@ int main(void) {
   RUN_TEST(test_crt_strike_should_jitter_rows_and_decay);
   RUN_TEST(test_crt_strike_should_slide_rows_and_boost_ca);
   RUN_TEST(test_crt_sound_should_play_only_when_enabled_and_unmuted);
+  RUN_TEST(test_crt_sound_should_stay_silent_while_the_face_is_covered);
   RUN_TEST(test_crt_strike_pcm_should_thunk_fall_and_never_click);
   RUN_TEST(test_crt_strike_pcm_should_fit_the_speaker_budget);
   RUN_TEST(test_crt_flash_should_need_backlight_on_and_the_toggle);

@@ -18,6 +18,10 @@ static AppTimer* s_flash_timer = NULL;  // latest tick arm — cancelled on retr
 // glyphs, clock, pass) blocks long enough to drain the audio ring once — the
 // audible pop-gap-hum. Delaying sound+chain past that frame keeps the ring fed.
 static bool s_strike_pending = false;
+// Updated by the App Focus service (subscribed in main.c): a notification,
+// alarm, modal, quick view or a launched app covering the face drops it.
+// Gates the strike sound only — the visual strike is unaffected.
+static bool s_app_in_focus = true;
 
 static void crt_flash_tick(void* data);
 
@@ -421,8 +425,10 @@ void crt_strike_synth(int16_t* buf, size_t n) {
 
 void crt_play_strike_sound(void) {
   // speaker_is_muted covers the system mute preference (including Quiet
-  // Time-mutes-speaker when the user set it). Honor it, and our own toggle.
-  if (!s_settings_crt_sound || speaker_is_muted()) return;
+  // Time-mutes-speaker when the user set it); s_app_in_focus is the App
+  // Focus service state — the strike sound belongs to a tube the user is
+  // looking at. Honor those, and our own toggle.
+  if (!s_settings_crt_sound || !s_app_in_focus || speaker_is_muted()) return;
   if (!s_strike_pcm_ready) {
     crt_strike_synth(s_strike_pcm, CRT_STRIKE_PCM_SAMPLES);
     s_strike_pcm_ready = true;
@@ -445,6 +451,17 @@ void crt_play_strike_sound(void) {
                                        .loop = false};
   const SpeakerTrack track = {.notes = through, .num_notes = 1, .sample = &sample};
   speaker_play_tracks(&track, 1, CRT_STRIKE_VOLUME);
+}
+
+void crt_app_focus_will_handler(bool in_focus) {
+  // A cover is ABOUT to appear: silence immediately, not after the animation.
+  if (!in_focus) s_app_in_focus = false;
+}
+
+void crt_app_focus_did_handler(bool in_focus) {
+  // Focus reported while the cover closes is too early; enable only on the
+  // completed transition.
+  if (in_focus) s_app_in_focus = true;
 }
 
 void crt_apply_setting_change(void) {

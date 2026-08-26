@@ -124,6 +124,10 @@ void backlight_service_unsubscribe(void) {
   mock_backlight_unsubscribe_count++;
   mock_backlight_handler = NULL;
 }
+AppFocusHandlers mock_app_focus_handlers = {NULL, NULL};
+void app_focus_service_subscribe_handlers(AppFocusHandlers handlers) {
+  mock_app_focus_handlers = handlers;
+}
 
 uint8_t mock_framebuffer[200 * 228];
 int mock_fb_capture_count = 0;
@@ -693,6 +697,7 @@ void mock_reset(void) {
   mock_backlight_subscribe_count = 0;
   mock_backlight_unsubscribe_count = 0;
   mock_backlight_handler = NULL;
+  mock_app_focus_handlers = (AppFocusHandlers){NULL, NULL};
   mock_timer_register_count = 0;
   mock_timer_cancel_count = 0;
   mock_timer_last_ms = 0;
