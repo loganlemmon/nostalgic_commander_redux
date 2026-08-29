@@ -33,7 +33,7 @@
 #include "../src/c/crt.c"
 #include "../src/c/main.c"
 
-#define RAMP_CELLS 18
+#define RAMP_CELLS (CRT_VIGNETTE_BAND_PX + 1)
 
 static double mean_level(uint8_t p) {
   return (((p >> 4) & 3) + ((p >> 2) & 3) + (p & 3)) / 3.0;
@@ -69,13 +69,13 @@ static void report(const char* name, const WatchTheme* theme, uint8_t fill) {
   }
 
   printf("  side ");
-  for (int x = 0; x < RAMP_CELLS; x++) {
+  for (int x = 0; x <= CRT_VIGNETTE_SIDE_PX + 1; x++) {
     double s = 0;
     for (int y = 90; y < 138; y++) s += mean_level(mock_framebuffer[y * 200 + x]);
     printf("%.2f ", s / 48.0);
   }
   printf("\n  top  ");
-  for (int y = 0; y < RAMP_CELLS; y++) {
+  for (int y = 0; y <= CRT_VIGNETTE_BAND_PX; y++) {
     double s = 0;
     for (int x = 70; x < 130; x++) s += mean_level(mock_framebuffer[y * 200 + x]);
     printf("%.2f ", s / 60.0);

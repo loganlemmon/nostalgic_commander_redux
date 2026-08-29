@@ -3856,6 +3856,41 @@ void test_crt_vignette_light_bg_should_keep_ink_off_the_fields_levels(void) {
   }
 }
 
+// Both axes map a pixel's distance from the edge onto the falloff LUTs'
+// 0..CRT_VIGNETTE_PX domain with an integer divide. If a band does not divide
+// evenly, some pixels advance two depths while their neighbours advance one
+// and the ramp grows a seam: BAND_PX 16 against EDGE_PX 3 put 16 depths into
+// 14 rows, so rows 8 and 9 — the two rows of the top slot's border — rendered
+// at gains 114 and 158, twice the usual step apart. One border row read
+// dimmer than the other and glyphs crossing the seam looked like they
+// wobbled. Every depth must be reachable on both axes.
+void test_crt_vignette_should_reach_every_depth_on_both_axes(void) {
+  s_active_theme = &s_theme_panel;  // dark curve: all 17 gains are distinct
+  int seen[257];
+
+  memset(seen, 0, sizeof(seen));
+  int distinct = 0;
+  for (int y = 0; y <= CRT_VIGNETTE_BAND_PX; y++) {
+    int f = crt_vignette_q8(100, y, 200, 228);
+    if (!seen[f]) {
+      seen[f] = 1;
+      distinct++;
+    }
+  }
+  TEST_ASSERT_EQUAL_INT(CRT_VIGNETTE_PX + 1, distinct);  // vertical skips nothing
+
+  memset(seen, 0, sizeof(seen));
+  distinct = 0;
+  for (int x = 0; x <= CRT_VIGNETTE_SIDE_PX; x++) {
+    int f = crt_vignette_q8(x, 113, 200, 228);
+    if (!seen[f]) {
+      seen[f] = 1;
+      distinct++;
+    }
+  }
+  TEST_ASSERT_EQUAL_INT(CRT_VIGNETTE_PX + 1, distinct);  // horizontal skips nothing
+}
+
 void test_crt_vignette_rims_should_be_symmetric_top_to_bottom(void) {
   // crt_edge_distance measures to the NEAREST horizontal edge, so EDGE_PX's
   // solid rows and the falloff behind them land on the bottom exactly as they
@@ -3913,32 +3948,59 @@ void test_crt_vignette_should_separate_a_single_pixel_stroke(void) {
   TEST_ASSERT_TRUE(rows_checked >= 3);
 }
 
+// A status fill carries meaning, so the falloff must never walk one onto a
+// different palette colour. This has bitten twice. Dialog's yellow is brown
+// (2,1,0) — CGA has no dark yellow — and its red and green take different Q4
+// values under one Bayer threshold, so the phases that zeroed green rendered
+// (r,0,0), that theme's own alarm red, on the low-battery band. Then Panel's
+// SunsetOrange (3,1,0) did the same on the PCP chip once the channels dithered
+// out of phase, because hold_hue was gated behind a light-field test that has
+// nothing to do with hue.
+//
+// So the invariant is stated whole-frame and theme-agnostic: a channel the
+// source had may not reach 0 while another channel of the same pixel survives.
+// Everything may go black together at the rim; nothing may change hue on the
+// way there.
 void test_crt_vignette_should_not_decay_a_status_fill_into_another_status_color(void) {
-  // A status fill carries meaning, so the falloff must not walk it onto a
-  // different one. Dialog's yellow is brown (2,1,0) — CGA has no dark yellow —
-  // and red and green take different Q4 values under the one Bayer threshold,
-  // so the phases that quantize green to 0 rendered (r,0,0): this theme's own
-  // alarm red, on the low-battery band. hold_hue keeps a channel the source
-  // had at 1 while any other channel survives, so the fill can only dim.
-  s_settings_crt = 1;
-  s_flash_phase = CRT_FLASH_IDLE;
-  s_active_theme = &s_theme_dialog;
-  memset(mock_framebuffer, 0xE4, sizeof(mock_framebuffer));  // WindsorTan fill
-  crt_update_proc(NULL, s_fake_ctx);
+  const struct {
+    const char* name;
+    uint8_t byte;
+  } fills[] = {
+      {"WindsorTan (2,1,0)", 0xE4},   {"SunsetOrange (3,1,0)", 0xF4},
+      {"Icterine (3,3,1)", 0xFD},     {"ScreaminGreen (1,3,1)", 0xDD},
+      {"IslamicGreen (0,2,0)", 0xC8}, {"DarkCandyAppleRed (2,0,0)", 0xE0},
+      {"ElectricBlue (2,3,3)", 0xEF},
+  };
+  for (unsigned t = 0; t < NUM_THEMES; t++) {
+    for (unsigned c = 0; c < sizeof(fills) / sizeof(fills[0]); c++) {
+      s_settings_crt = 1;
+      s_flash_phase = CRT_FLASH_IDLE;
+      s_active_theme = all_themes[t];
+      memset(mock_framebuffer, fills[c].byte, sizeof(mock_framebuffer));
+      crt_update_proc(NULL, s_fake_ctx);
 
-  int dimmed = 0, black = 0;
-  for (int y = 0; y < 228; y++) {
-    for (int x = 0; x < 200; x++) {
-      uint8_t px = mock_framebuffer[y * 200 + x];
-      int r = (px >> 4) & 3, g = (px >> 2) & 3;
-      TEST_ASSERT_EQUAL_INT(0, px & 3);    // blue was 0 and stays 0
-      if (r > 0) TEST_ASSERT_TRUE(g > 0);  // never (r,0,0) — the alarm red
-      if (r < 2) dimmed++;
-      if ((px & 0x3F) == 0) black++;
+      int src[3] = {(fills[c].byte >> 4) & 3, (fills[c].byte >> 2) & 3, fills[c].byte & 3};
+      int dimmed = 0;
+      for (int y = 0; y < 228; y++) {
+        for (int x = 0; x < 200; x++) {
+          uint8_t px = mock_framebuffer[y * 200 + x];
+          int got[3] = {(px >> 4) & 3, (px >> 2) & 3, px & 3};
+          int alive = got[0] + got[1] + got[2];
+          for (int ch = 0; ch < 3; ch++) {
+            // The channel died while the pixel is still lit: a hue change.
+            if (src[ch] > 0 && got[ch] == 0 && alive > 0) {
+              char msg[96];
+              snprintf(msg, sizeof msg, "%s changed hue on theme %u at (%d,%d)", fills[c].name, t,
+                       x, y);
+              TEST_FAIL_MESSAGE(msg);
+            }
+          }
+          if (alive < src[0] + src[1] + src[2]) dimmed++;
+        }
+      }
+      TEST_ASSERT_TRUE(dimmed > 0);  // the falloff still bites the fill
     }
   }
-  TEST_ASSERT_TRUE(dimmed > 0);  // the falloff still bites the fill
-  TEST_ASSERT_TRUE(black > 0);   // and still reaches the bezel
 }
 
 void test_crt_vignette_dark_bg_should_still_dim_to_black(void) {
@@ -4045,12 +4107,14 @@ void test_crt_ca_onset_should_cut_at_the_dead_zone(void) {
 void test_crt_ca_ladder_should_be_monotone_and_mirror_symmetric(void) {
   // Thirds ladder: displacement grows with radius and mirrors cleanly about
   // both centrelines (the pass derives left/right and top/bottom pull signs
-  // from the half, so any asymmetry here doubles at the seam).
+  // from the half, so any asymmetry here doubles at the seam). The ladder is
+  // continuous over 0..4 — it used to be only 0 or 4, and that step was the
+  // hard oval that cut through complication text.
   for (int y = 0; y < 228; y++) {
     int prev = crt_ca_shift3(0, y, 200, 228);
     for (int x = 0; x < 200; x++) {
       int s = crt_ca_shift3(x, y, 200, 228);
-      TEST_ASSERT_TRUE(s == 0 || s == 4);
+      TEST_ASSERT_TRUE(s >= 0 && s <= 4);
       TEST_ASSERT_EQUAL_INT(s, crt_ca_shift3(199 - x, y, 200, 228));
       TEST_ASSERT_EQUAL_INT(s, crt_ca_shift3(x, 227 - y, 200, 228));
       if (x <= 100) {
@@ -4489,6 +4553,7 @@ int main(void) {
   RUN_TEST(test_inbox_should_land_every_field_of_a_full_weather_payload);
   RUN_TEST(test_crt_should_not_capture_the_framebuffer_while_disabled);
   RUN_TEST(test_crt_vignette_light_bg_should_keep_ink_off_the_fields_levels);
+  RUN_TEST(test_crt_vignette_should_reach_every_depth_on_both_axes);
   RUN_TEST(test_crt_vignette_rims_should_be_symmetric_top_to_bottom);
   RUN_TEST(test_crt_vignette_should_separate_a_single_pixel_stroke);
   RUN_TEST(test_crt_vignette_should_not_decay_a_status_fill_into_another_status_color);

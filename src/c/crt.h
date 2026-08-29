@@ -55,29 +55,54 @@ extern Layer* s_crt_layer;
 // ramp and made anything past 12 look worse.
 #define CRT_VIGNETTE_SIDE_PX 16
 // Top/bottom band, in DISPLAY px — the warp is horizontal-only, so nothing
-// resamples this axis and it is the figure you see. Sized so both axes reach
-// full brightness at the same offset (measured: dest 9 on each).
-#define CRT_VIGNETTE_BAND_PX 16
+// resamples this axis and it is the figure you see.
+//
+// Keep (BAND_PX - EDGE_PX + 1) equal to VIGNETTE_PX. The row-to-depth map is
+// an integer divide, so any other ratio makes some rows advance two LUT
+// depths while their neighbours advance one. At 16 with EDGE_PX 3 that
+// divided 16 depths over 14 rows: rows 8 and 9 — the two rows of the top
+// slot's border — landed on gains 114 and 158, 44 apart where every other
+// step was ~20, so one border row read dimmer than the other and glyphs
+// crossing the seam looked like they wobbled. 18 makes it exactly one depth
+// per row again.
+#define CRT_VIGNETTE_BAND_PX 18
 // Rows held at depth 0 before the falloff starts, standing in for the columns
 // the warp's clamp renders solid on the sides. Nothing clamps vertically, so
 // without it the top carried 2px of black against the sides' 6 and read as
 // missing. Track it to the clamp: at K=8 that is three each way.
 #define CRT_VIGNETTE_EDGE_PX 3
 // Gain below which the falloff is bezel, not content — the light LUT's depths
-// 0-3, where the field is crushed and nothing is meant to be read. Ink/field
+// 0 to 4, where the field is crushed and nothing is meant to be read. Ink/field
 // separation (crt.c's clear_of_ground) stops here so the rim can reach black.
+// Compare it against the curve when either changes: depth 4 is 96, which is
+// under this, so the boundary sits between depths 4 and 5.
 #define CRT_VIGNETTE_READ_Q8 128
 #define CRT_CORNER_RADIUS 14
 #define CRT_WARP_R2_K 8
-// CA zones by elliptical radius (Q8 of r²-summated terms; mid-edges ≈ 256,
-// corner ≈ 362). r < R2: clean; beyond: a flat 1+1/3px per channel —
-// expressed in thirds (0/4) because stage 1 samples fractionally, and a
-// per-half ±1 third in the pass cancels the panel's built-in element offset
-// (the stripe does not mirror: −1 left, +1 right) so the centre of the screen
-// converges instead of carrying a 2/3px floor.
-// Vertical uses one threshold (R2V) with a 1px cap, whole pixels still.
+// CA zones by elliptical radius, in the xq+yq units stage 1 already computes:
+// 0 at the centre, 256 at a mid-edge, 512 in a corner. Inside R2 the image is
+// clean; past it each channel separates, up to 1+1/3px — expressed in THIRDS
+// (0..4) because stage 1 samples fractionally, and a per-half ±1 third in the
+// pass cancels the panel's built-in element offset (the stripe does not
+// mirror: −1 left, +1 right) so the centre converges instead of carrying a
+// 2/3px floor.
+//
+// Horizontal RAMPS from 0 to 4 thirds rather than stepping. A step put a hard
+// oval on the glass — a 1+1/3px shift appearing between one pixel and the
+// next — and where that oval crossed a complication's text it cut the word in
+// half. The fractional sampler could already render thirds; only this zone
+// function was quantized. RAMP_SHIFT sets the width: 4 thirds over (4 <<
+// SHIFT) units of r², so 5 spans 128 and saturates just inside a mid-edge,
+// keeping full strength everywhere it used to be and softening only the onset.
+// A shift, not a divide — stage 1 runs this per pixel.
+//
+// Vertical still steps: its shift is whole rows (the ring samples y±1, there
+// is no fractional row), so there is nothing between 0 and 1 to ramp through.
+// Its jump is 1px against the horizontal's 1+1/3, and it was not the visible
+// edge.
 #define CRT_CA_R2_Q8 170
 #define CRT_CA_R2V_Q8 170
+#define CRT_CA_RAMP_SHIFT 5
 
 // Squared thresholds for the zone compare — no per-pixel sqrt needed.
 #define CRT_CA_R2_X2Q8 ((CRT_CA_R2_Q8 * CRT_CA_R2_Q8 + 255) >> 8)
@@ -107,7 +132,7 @@ int crt_warp_q16(int x, int y, int w, int h);
 // Source column for dest (x,y) under the warp alone (no strike jitter).
 int crt_warp_sx(int x, int y, int w, int h);
 // CA per-channel displacement in THIRDS of a px at (x,y): 0 inside the dead
-// zone, 4 past it — see crt.h's CRT_CA_R*_Q8 zone map.
+// zone, ramping to 4 past it — see the CRT_CA_* zone map above.
 int crt_ca_shift3(int x, int y, int w, int h);
 
 // The whole pass over an 8-bit GColor8 framebuffer (0xAARRGGBB packed bytes,

@@ -62,13 +62,15 @@ int crt_warp_sx(int x, int y, int w, int h) {
 
 // Horizontal CA from the squared Q8 radius (units: xq + yq from
 // crt_ca_shift3), returning per-channel displacement in THIRDS of a pixel:
-// 0 inside the dead zone, a flat 4 (1+1/3 px) outside. Thirds because the
-// pass now samples channels fractionally (two weighted taps) instead of
-// copying whole neighbours — see stage 1 in crt_apply_framebuffer. Zone
-// boundary squared once: rq ≥ R ⇔ xq+yq ≥ ceil(R²/256) — so no per-pixel
-// sqrt is needed.
+// 0 inside the dead zone, then ramping to 4 (1+1/3 px) over CRT_CA_RAMP_SHIFT
+// — see crt.h for why it ramps rather than steps. Thirds because the pass
+// samples channels fractionally (two weighted taps) instead of copying whole
+// neighbours — see stage 1 in crt_apply_framebuffer. Zone boundary squared
+// once: rq ≥ R ⇔ xq+yq ≥ ceil(R²/256) — so no per-pixel sqrt is needed.
 static int crt_ca_t3_h2(int xy_sum) {
-  return xy_sum < CRT_CA_R2_X2Q8 ? 0 : 4;
+  if (xy_sum <= CRT_CA_R2_X2Q8) return 0;
+  int t3 = (xy_sum - CRT_CA_R2_X2Q8) >> CRT_CA_RAMP_SHIFT;
+  return t3 > 4 ? 4 : t3;
 }
 // Vertical wider zones, 1px max, same formulation.
 static int crt_ca_shift_v2(int xy_sum) {
@@ -169,7 +171,6 @@ int crt_strike_offset(int y, int flash_phase) {
 // Quantize a Q4 channel level to the panel's four steps, the pixel's Bayer
 // threshold breaking the rounding direction.
 static int dither_q4(int v_q4, int t) {
-  if (v_q4 < 0) v_q4 = 0;
   int v = (v_q4 + t) >> 4;
   return v > 3 ? 3 : v;
 }
@@ -231,8 +232,13 @@ static int hold_hue(int v, int src, int other1, int other2) {
 }
 
 static int clear_of_ground(int v, int src, int gnd_lo, int gnd_hi, int bg_level) {
-  if (src < bg_level && v >= gnd_lo) return gnd_lo > 0 ? gnd_lo - 1 : 0;
-  if (src > bg_level && v <= gnd_hi) return gnd_hi < 3 ? gnd_hi + 1 : 3;
+  // Where the field's span already reaches the end of the range there is no
+  // step left on that side, and the pixel is left alone rather than shoved
+  // onto a level the field itself renders. That is not rare: a level-1 field
+  // has gnd_lo == 0 at every depth below its plateau, so returning 0 here
+  // would crush all of its darker ink to black for no separation at all.
+  if (src < bg_level && v >= gnd_lo) return gnd_lo > 0 ? gnd_lo - 1 : v;
+  if (src > bg_level && v <= gnd_hi) return gnd_hi < 3 ? gnd_hi + 1 : v;
   return v;
 }
 
@@ -262,9 +268,16 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
                      ? (s_strike_amp_px[flash_phase] + 1) / 2
                      : 0;
   const int h1sq = (h - 1) * (h - 1);
-  // Light-field dot floor for stage 2 (theme.h): keeps the speckle one
-  // shade under the ground instead of scattering black.
+  // The field's own grey level, or 0 for a theme without one. Stage 2 keys
+  // both of its content rules off it: ink/field separation runs only when
+  // there is a grey field to separate against, and it is the reference that
+  // separation measures from.
   const int vig_ground = theme_ground_level(s_active_theme);
+  // ...and the falloff curve it selects, chosen once per frame. crt_vignette_q8()
+  // is the public form and re-picks it on every call — correct, and fine for
+  // the tests and the ramp tool, but it is a cross-TU call and this loop runs
+  // 45k times a frame. Stage 2 walks the LUT directly instead.
+  const uint16_t* vig_lut = vig_ground > 0 ? s_vignette_q8_light : s_vignette_q8;
 
   // Per-row body, applied in two half-passes. Both passes read away from
   // the screen centreline: from captured (raw) ring rows only, which is the
@@ -306,7 +319,9 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
         // converge: at the centre the rasters land on the content.
         int q = crt_ca_t3_h2(s_ca_xq[x] + yterm) + (left ? -1 : 1) + 3 * ca_boost;
         int j = (q - (q < 0 ? 2 : 0)) / 3;  // floor(q/3); q >= -1 by construction
-        // 0..2 — 1 unreachable: rung 4 + ±1 correction + 3k boost ⇒ q ≢ 1 (mod 3).
+        // 0..2, all three reachable. While crt_ca_t3_h2 returned only 0 or 4 the
+        // ±1 correction kept q off 1 (mod 3) and f was never 1; the ramped onset
+        // sweeps every rung, so it is now. The weighted tap handles all three.
         int f = q - 3 * j;  // blend weight toward the farther tap
         int s_v = crt_ca_shift_v2(s_ca_xq[x] + yterm);
 
@@ -361,9 +376,10 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
 
       // 2) Vignette + dither on the CA'd row — dimming in content space, so
       //    the curvature pass below bends the already-darkened rim with the
-      //    image (adherent to the curvature; its horizontal stretch is
-      //    pre-compensated on the vertical axis by the 16:28 depth scale).
-      //    Mirror-symmetric Bayer thresholds keep both rims identical.
+      //    image. The two axes are sized independently — see crt.h's
+      //    CRT_VIGNETTE_SIDE_PX and _BAND_PX — because the warp resamples
+      //    columns and leaves rows alone. Mirror-symmetric Bayer thresholds
+      //    keep both rims identical.
       int ey = y < h - 1 - y ? y : h - 1 - y;
       int ty = ey & 3;
       // The row as drawn, before stage 1 scattered R and B across columns.
@@ -374,7 +390,8 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
       const uint8_t* raw_row = s_vraw_ring[y % 3];
       for (int x = 0; x < w; x++) {
         int ex = x < w - 1 - x ? x : w - 1 - x;
-        int f = crt_vignette_q8(x, y, w, h);
+        int d = crt_edge_distance(x, y, w, h);
+        int f = d >= CRT_VIGNETTE_PX ? 256 : vig_lut[d];
         uint8_t p = row_ca[x];
         int t = s_bayer4[ty * 4 + (ex & 3)];
         int rs = (p >> 4) & 3, gs = (p >> 2) & 3, bs = p & 3;
@@ -409,9 +426,14 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
             g = clear_of_ground(g, gs, gnd_lo, gnd_hi, vig_ground);
             b = clear_of_ground(b, bs, gnd_lo, gnd_hi, vig_ground);
           }
-        } else if (vig_ground > 0) {
+        } else if (!grey_src) {
           // Colored content: hold the hue's channels together instead. Read
           // the pre-hold values so the three lifts don't feed each other.
+          // NOT gated on vig_ground: whether a fill may decay into another
+          // palette colour has nothing to do with whether the FIELD is grey,
+          // and gating it there left the dark themes unprotected — panel's
+          // SunsetOrange status fill shed its green near the rim and rendered
+          // as flat red, on the one chip that means "worst reading".
           int r0 = r, g0 = g, b0 = b;
           r = hold_hue(r0, rs, g0, b0);
           g = hold_hue(g0, gs, r0, b0);
@@ -464,9 +486,11 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
         // The blend zeroes channels independently too: a black rim column
         // against a colored fill lands on (1,0,0) at some fractions — the same
         // alarm red stage 2's hold_hue exists to prevent, arrived at one stage
-        // later. Keyed on the DOMINANT tap's content, so grey ink keeps the
-        // separation stage 2 gave it instead of having a channel lifted back.
-        if (vig_ground > 0 && !row_grey[sx]) {
+        // later. Keyed on the LOWER tap's content — usually the dominant one,
+        // and not worth carrying fr in to settle the fringe case — so grey ink
+        // keeps the separation stage 2 gave it instead of having a channel
+        // lifted back.
+        if (!row_grey[sx]) {
           int sr = max2((p0 >> 4) & 3, (p1 >> 4) & 3);
           int sg = max2((p0 >> 2) & 3, (p1 >> 2) & 3);
           int sb = max2(p0 & 3, p1 & 3);

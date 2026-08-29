@@ -14,6 +14,7 @@ Thumbs.db
 
 # Test binaries
 test/test_watchface
+test/vignette_ramp
 test/*.dSYM
 
 .clangd
