@@ -117,10 +117,12 @@ static const uint16_t s_vignette_q8[CRT_VIGNETTE_PX + 1] = {
 // half its levels across a bright field — on a 4-level panel that reads as
 // black pepper, not a falloff. Ease-in (1-(1-d/D)^4) keeps the field ~full
 // to depth ~9, ramps speckle density, and goes black only at the rim — a
-// bezel ring instead of dirt. Depths 1-3 run hot on black-dot density
+// bezel ring instead of dirt (the theme's vignette_floor keeps the speckle
+// one shade under the ground). Depths 1-3 run hot on dot density
 // (87/50/19%) so the vertical bands — which have no warp clamp columns
 // feeding them solid black — still read as a proper rim. Level-1 fields
-// (Navigator) graduate by dot density alone.
+// (Navigator) graduate by dot density alone, floorless: their only deeper
+// shade IS black.
 static const uint16_t s_vignette_q8_light[CRT_VIGNETTE_PX + 1] = {
     0, 20, 64, 110, 145, 175, 199, 217, 230, 240, 247, 256, 256, 256, 256, 256, 256};
 
@@ -179,6 +181,9 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
                      ? (s_strike_amp_px[flash_phase] + 1) / 2
                      : 0;
   const int h1sq = (h - 1) * (h - 1);
+  // Light-field dot floor for stage 2 (theme.h): keeps the speckle one
+  // shade under the ground instead of scattering black.
+  const int vig_floor = s_active_theme->vignette_floor;
 
   // Per-row body, applied in two half-passes. Both passes read away from
   // the screen centreline: from captured (raw) ring rows only, which is the
@@ -285,9 +290,19 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
         int f = crt_vignette_q8(x, y, w, h);
         uint8_t p = row_ca[x];
         int t = s_bayer4[ty * 4 + (ex & 3)];
-        int r = dither_channel((p >> 4) & 3, f, t);
-        int g = dither_channel((p >> 2) & 3, f, t);
-        int b = dither_channel(p & 3, f, t);
+        int rs = (p >> 4) & 3, gs = (p >> 2) & 3, bs = p & 3;
+        int r = dither_channel(rs, f, t);
+        int g = dither_channel(gs, f, t);
+        int b = dither_channel(bs, f, t);
+        // Dot floor: brighter-than-floor sources never dip below it while
+        // any gain remains — black speckle on a light ground reads as dirt,
+        // one-shade-down dots read as a falloff. The rim (f=0) is exempt:
+        // it must still render solid black for the bezel read.
+        if (vig_floor > 0 && f > 0) {
+          if (r < vig_floor && rs > vig_floor) r = vig_floor;
+          if (g < vig_floor && gs > vig_floor) g = vig_floor;
+          if (b < vig_floor && bs > vig_floor) b = vig_floor;
+        }
         row_ca[x] = GCOLOR8_ALPHA | (uint8_t)((r << 4) | (g << 2) | b);
       }
 

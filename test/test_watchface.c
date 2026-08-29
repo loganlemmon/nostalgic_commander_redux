@@ -3854,10 +3854,12 @@ void test_crt_vignette_should_dither_the_falloff(void) {
 
 void test_crt_vignette_light_bg_should_fall_off_gradually(void) {
   // Light backgrounds take a quartic ease-in falloff instead of the
-  // dark-theme smoothstep: dot DENSITY carries the darkening. Level-2 fields
-  // never render a 0 mid-band (dither spans {1,2} until f dips under 128 at
-  // depth 2), the speckle thickens inward-to-outward, the rim itself goes
-  // black, and the field is untouched from depth 11 on. The vignette runs in
+  // dark-theme smoothstep: dot DENSITY carries the darkening, and the theme's
+  // vignette_floor keeps every field dot at DarkGray — pure black appears on
+  // the rim alone (the LUT's f<128 depths would otherwise speckle black next
+  // to the bezel: pepper, not a falloff). The speckle thickens
+  // inward-to-outward, and the field is untouched from depth 11 on. The
+  // vignette runs in
   // CONTENT space (applied before curvature, so it rides the warp), with the
   // vertical depth pre-stretched BAND_PX-scaled — the warp stretches the side bands to
   // ~21 display px on its own, so all four sides land at ~21px.
@@ -3899,6 +3901,21 @@ void test_crt_vignette_light_bg_should_fall_off_gradually(void) {
   for (int y = 20; y <= 207; y++) {  // light LUT plateaus at d' >= 11
     TEST_ASSERT_EQUAL_HEX8(0xEA, mock_framebuffer[y * 200 + 100]);
   }
+
+  // Dot floor pinned in the vertical band (no horizontal pull near x=100,
+  // so columns stay stable): rows 2..17 span LUT depths 1..9 under the 16:28
+  // presetretch — pre-floor depths 1..3 would scatter pure-black dots here.
+  // Only rim rows (y<=1, depth 0) may render black.
+  TEST_ASSERT_EQUAL_HEX8(0xC0, mock_framebuffer[200 + 100]);  // (100,1) rim
+  int floored = 0;
+  for (int y = 2; y <= 17; y++) {
+    for (int x = 92; x <= 104; x++) {
+      uint8_t px = mock_framebuffer[y * 200 + x];
+      TEST_ASSERT_TRUE(px == 0xEA || px == 0xD5);  // field or floor, never black
+      if (px == 0xD5) floored++;
+    }
+  }
+  TEST_ASSERT_TRUE(floored > 0);  // speckle still thickens toward the rim
 }
 
 void test_crt_vignette_dark_gray_field_should_graduate_by_density(void) {

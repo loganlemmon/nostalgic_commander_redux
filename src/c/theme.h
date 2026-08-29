@@ -18,6 +18,13 @@ typedef struct {
   // take an ease-in falloff — speckle density over shade, black only at the
   // rim — since a smoothstep sweep across a bright field reads as pepper.
   bool bg_is_light;
+  // CRT vignette dot floor, as a 2-bit grey level: content brighter than
+  // this never dithers below it during the falloff, so light-field speckle
+  // graduates by dot density one shade down instead of scattering pure
+  // black dots next to the bezel. The rim itself (falloff gain 0) still
+  // renders black. 0 disables — dark themes, and Navigator, whose DarkGray
+  // ground's only deeper shade already IS black.
+  uint8_t vignette_floor;
 } WatchTheme;
 
 extern const WatchTheme* s_active_theme;

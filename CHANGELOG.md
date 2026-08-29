@@ -6,6 +6,12 @@ All notable changes to Nostalgic Commander. Format follows
 
 ## [Unreleased]
 
+### Changed
+
+- CRT vignette on light fields (Dialog) speckles one shade under the ground
+  (was pure-black dots in the band next to the bezel — pepper, not a
+  falloff). Only the rim itself still renders black. Navigator keeps black
+  dots: its DarkGray ground has no deeper shade to graduate by.
 ## [1.8.0] - 2026-08-23
 
 ### Added
