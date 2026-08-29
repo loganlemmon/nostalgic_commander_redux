@@ -86,15 +86,20 @@ int crt_ca_shift3(int x, int y, int w, int h) {
 
 // Distance toward the nearest frame edge, counting around the corner arcs:
 // inside the corner square the boundary is the arc, elsewhere the straight
-// edge. 0 = boundary itself, growing inward. Only the VERTICAL depth is
-// pre-stretched 16:28: the warp stretches the horizontal bands from 16
-// content px to ~21 display px on its own, and the wider read won on
-// hardware — scaling the untouched axis up matches it instead of shrinking
-// the sides back. (The falloff sits in content space, so its width is
-// measured before the warp's stretch.)
+// edge. 0 = boundary itself, growing inward. Both axes are scaled onto the
+// LUTs' 0..VIGNETTE_PX domain by their own band constant, so the curves stay
+// fixed while the rims resize. The two bands are not in the same units: the
+// falloff sits in content space, ahead of the warp, so the side band is
+// measured before the warp's ~1.3x stretch while the top/bottom band — which
+// the warp never touches — is measured on the glass.
 static int crt_edge_distance(int x, int y, int w, int h) {
-  int ex = x < w - 1 - x ? x : w - 1 - x;
-  int ey = (y < h - 1 - y ? y : h - 1 - y) * CRT_VIGNETTE_PX / CRT_VIGNETTE_BAND_PX;
+  int ex = (x < w - 1 - x ? x : w - 1 - x) * CRT_VIGNETTE_PX / CRT_VIGNETTE_SIDE_PX;
+  int edge_px = y < h - 1 - y ? y : h - 1 - y;
+  // EDGE_PX rows of depth 0 first, standing in for the warp's clamped columns,
+  // then the falloff over what remains of the band.
+  int ey = edge_px < CRT_VIGNETTE_EDGE_PX ? 0
+                                          : (edge_px - CRT_VIGNETTE_EDGE_PX + 1) * CRT_VIGNETTE_PX /
+                                                (CRT_VIGNETTE_BAND_PX - CRT_VIGNETTE_EDGE_PX + 1);
   if (ex < CRT_CORNER_RADIUS && ey < CRT_CORNER_RADIUS) {
     int rx = CRT_CORNER_RADIUS - ex;
     int ry = CRT_CORNER_RADIUS - ey;
@@ -113,24 +118,34 @@ static int crt_edge_distance(int x, int y, int w, int h) {
 static const uint16_t s_vignette_q8[CRT_VIGNETTE_PX + 1] = {
     0, 11, 28, 48, 70, 92, 114, 136, 158, 178, 196, 213, 227, 239, 248, 254, 256};
 
-// Light backgrounds swap the curve, not the depth: the smoothstep sweeps
+// Light backgrounds swap the curve, not the depth: the dark smoothstep sweeps
 // half its levels across a bright field — on a 4-level panel that reads as
-// black pepper, not a falloff. Ease-in (1-(1-d/D)^4) keeps the field ~full
-// to depth ~9, ramps speckle density, and goes black only at the rim — a
-// bezel ring instead of dirt (the theme's vignette_floor keeps the speckle
-// one shade under the ground). Depths 1-3 run hot on dot density
-// (87/50/19%) so the vertical bands — which have no warp clamp columns
-// feeding them solid black — still read as a proper rim. Level-1 fields
-// (Navigator) graduate by dot density alone, floorless: their only deeper
-// shade IS black.
+// black pepper, not a falloff — so this one plateaus at depth 11 and carries
+// the darkening as dot density, a bezel ring instead of dirt.
+//
+// The low end is spaced by where a LEVEL-2 field crosses its own quantization
+// boundaries, which is what the eye reads as the shape of the rim. That field
+// has two steps to make (2 -> 1 -> 0) against a level-1 field's one, and it
+// hits DarkGray at f=128: a quartic ease-in put that at depth 3 of 11, so
+// black sat four depths from a nearly-full field with almost no mid-tone
+// between. Here f=132 lands at depth 5, splitting the band evenly — depths
+// 1-4 ramp black to DarkGray, depth 5 is solid DarkGray, depths 6-10 ramp on
+// to LightGray.
+//
+// The floor of 20 at depth 1 is set by the OTHER field level. A level-1 field
+// (Navigator) has no shade between black and its ground, so its whole rim is
+// dot density, and it lights no dot at all until f reaches 16 — f=12 there was
+// a second solid-black depth, thickening the bar and punching a black column
+// back through the middle of the ramp at wider side bands. Keep depth 1 above
+// 16 for that reason; it is nearly free on a level-2 field (6% lit -> 12%).
 static const uint16_t s_vignette_q8_light[CRT_VIGNETTE_PX + 1] = {
-    0, 20, 64, 110, 145, 175, 199, 217, 230, 240, 247, 256, 256, 256, 256, 256, 256};
+    0, 20, 40, 64, 96, 132, 172, 205, 228, 241, 249, 256, 256, 256, 256, 256, 256};
 
-// Same falloff without per-pixel arithmetic (the LUTs above carry it); the
-// theme's bg_is_light picks the curve.
+// Same falloff without per-pixel arithmetic (the LUTs above carry it); a
+// theme with a grey field (theme_ground_level, theme.h) takes the light curve.
 static int crt_vignette_q8_from_depth(int d) {
   if (d >= CRT_VIGNETTE_PX) return 256;
-  return s_active_theme->bg_is_light ? s_vignette_q8_light[d] : s_vignette_q8[d];
+  return theme_ground_level(s_active_theme) > 0 ? s_vignette_q8_light[d] : s_vignette_q8[d];
 }
 
 int crt_vignette_q8(int x, int y, int w, int h) {
@@ -151,11 +166,74 @@ int crt_strike_offset(int y, int flash_phase) {
   return (int)(noise % (uint32_t)(2 * amp + 1)) - amp;
 }
 
-// c' = round(c * f / 256) with the pixel's Bayer threshold breaking the
-// rounding direction — shift-only (f <= 256 keeps c*16*f under 12k).
-static int dither_channel(int c, int f_q8, int t) {
-  int v = ((c * 16 * f_q8 >> 8) + t) >> 4;
+// Quantize a Q4 channel level to the panel's four steps, the pixel's Bayer
+// threshold breaking the rounding direction.
+static int dither_q4(int v_q4, int t) {
+  if (v_q4 < 0) v_q4 = 0;
+  int v = (v_q4 + t) >> 4;
   return v > 3 ? 3 : v;
+}
+
+// The gain in Q4: c * f / 256 — shift-only (f <= 256 keeps c*16*f under 12k).
+static int gain_q4(int c, int f_q8) {
+  return c * 16 * f_q8 >> 8;
+}
+
+// One channel through the falloff: gain, then ordered-dither into the panel's
+// four steps.
+//
+// There used to be a per-theme "dot floor" here holding brighter-than-floor
+// sources off black, because a falloff that dithers straight to black scatters
+// pepper on a lit field. Dithering the channels out of phase (stage 2) solved
+// that better: the three rarely reach 0 on the same pixel, so pure black is
+// 0-3% of the band instead of a scatter. The floor's own cost was that it
+// clamped every channel to the same level and flattened the ramp into a step,
+// which is exactly what it was supposed to prevent.
+static int vignette_level(int c, int f_q8, int t) {
+  return dither_q4(gain_q4(c, f_q8), t);
+}
+
+// The span the FIELD's dither covers at this gain: (q4 + t) >> 4 over the
+// Bayer t of 0..15, floored the same way vignette_level floors it.
+static void ground_span(int bg_level, int f_q8, int* lo, int* hi) {
+  int q4 = gain_q4(bg_level, f_q8);
+  *lo = q4 >> 4;
+  *hi = (q4 + 15) >> 4;
+}
+
+// Push a rendered level clear of EVERY level the field can take at this depth,
+// on the source's side of it. A gain is the right curve for the field itself
+// and for bright chrome, but on a 4-level panel it leaves ink and field
+// sharing a level: at depth 6 Navigator's caption dithers {1,2} over a field
+// dithering {0,1}, so a 1px stroke landing on a low Bayer phase renders the
+// exact level its neighbouring field pixels do and the stroke breaks up.
+// Matching the field pixel-for-pixel is not enough — a stroke is thinner than
+// the 4x4 dither tile, so the phases it misses are the ones beside it.
+// Disjoint spans are the guarantee that survives that, and they come out of a
+// per-depth bound rather than a per-pixel compare, so ink renders solid where
+// it used to speckle. A tube's luminance is continuous and never merges two
+// distinct inputs; the merge is our quantization, not the optics.
+// A channel the source had may not quantize to 0 while another channel of the
+// same pixel survives — that renders one palette color as a different one.
+// Dialog's yellow is brown (2,1,0), CGA having no dark yellow, and its red and
+// green take different Q4 values under the one Bayer threshold: the phases
+// that zero the green render (r,0,0), which is that theme's own alarm red, on
+// the low-battery band. Holding the channel at 1 keeps a fill inside its hue
+// family until the whole pixel reaches black, which it still does — every
+// channel zeroes together at the rim. Light fields only; the dark themes' rim
+// was tuned on hardware with the per-channel decay in place.
+static int max2(int a, int b) {
+  return a > b ? a : b;
+}
+
+static int hold_hue(int v, int src, int other1, int other2) {
+  return (src > 0 && v == 0 && (other1 > 0 || other2 > 0)) ? 1 : v;
+}
+
+static int clear_of_ground(int v, int src, int gnd_lo, int gnd_hi, int bg_level) {
+  if (src < bg_level && v >= gnd_lo) return gnd_lo > 0 ? gnd_lo - 1 : 0;
+  if (src > bg_level && v <= gnd_hi) return gnd_hi < 3 ? gnd_hi + 1 : 3;
+  return v;
 }
 
 // Vertical CA samples neighbour rows; the row the pass writes into must stay
@@ -165,6 +243,9 @@ static uint8_t s_vraw_ring[3][200];
 
 void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
   static uint8_t row_ca[200];
+  // Per-column: was the pixel grey as DRAWN? Stage 2 decides it from the raw
+  // row; stage 3 needs the same answer for the column its blend leans on.
+  static bool row_grey[200];
   static uint16_t s_ca_xq[200];
   static int s_ca_xq_w = 0;
   if (w > (int)sizeof(row_ca) || w <= 1 || h <= 1) return;
@@ -183,7 +264,7 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
   const int h1sq = (h - 1) * (h - 1);
   // Light-field dot floor for stage 2 (theme.h): keeps the speckle one
   // shade under the ground instead of scattering black.
-  const int vig_floor = s_active_theme->vignette_floor;
+  const int vig_ground = theme_ground_level(s_active_theme);
 
   // Per-row body, applied in two half-passes. Both passes read away from
   // the screen centreline: from captured (raw) ring rows only, which is the
@@ -285,24 +366,58 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
       //    Mirror-symmetric Bayer thresholds keep both rims identical.
       int ey = y < h - 1 - y ? y : h - 1 - y;
       int ty = ey & 3;
+      // The row as drawn, before stage 1 scattered R and B across columns.
+      // Which light-field rule a pixel takes is a property of the CONTENT —
+      // grey ink wants separating from its field, a colored fill wants its
+      // hue held — and CA makes every 1px stroke chromatic, so the CA'd pixel
+      // cannot answer that. Classify on the raw pixel, act on the CA'd one.
+      const uint8_t* raw_row = s_vraw_ring[y % 3];
       for (int x = 0; x < w; x++) {
         int ex = x < w - 1 - x ? x : w - 1 - x;
         int f = crt_vignette_q8(x, y, w, h);
         uint8_t p = row_ca[x];
         int t = s_bayer4[ty * 4 + (ex & 3)];
         int rs = (p >> 4) & 3, gs = (p >> 2) & 3, bs = p & 3;
-        int r = dither_channel(rs, f, t);
-        int g = dither_channel(gs, f, t);
-        int b = dither_channel(bs, f, t);
-        // Dot floor: brighter-than-floor sources never dip below it while
-        // any gain remains — black speckle on a light ground reads as dirt,
-        // one-shade-down dots read as a falloff. The rim (f=0) is exempt:
-        // it must still render solid black for the bezel read.
-        if (vig_floor > 0 && f > 0) {
-          if (r < vig_floor && rs > vig_floor) r = vig_floor;
-          if (g < vig_floor && gs > vig_floor) g = vig_floor;
-          if (b < vig_floor && bs > vig_floor) b = vig_floor;
+        // Ordered dither, one third of a cycle apart per channel. A grey run
+        // dithered in lockstep can only be black, DarkGray, LightGray or white
+        // — three stops from field to rim on a level-2 field, which is a sharp
+        // step however wide the band is, and no amount of band tuning adds a
+        // fifth grey to a 2-bit panel. Splitting the phase lets the channels
+        // cross their quantization boundaries at different pixels, so the run
+        // passes through (2,2,1), (2,1,1), (1,1,0) and so on: the same falloff
+        // rendered in thirds of a level instead of whole ones. It costs a
+        // colour cast at the rim, which is the CRT's own failure mode — the CA
+        // stage already models the beam landing worst there.
+        //
+        // Only the falloff band sees it. At full gain q4 is an exact multiple
+        // of 16, so every phase quantizes to the same level and the interior
+        // is untouched. B leads and R lags, which decays cool.
+        int r = vignette_level(rs, f, t);
+        int g = vignette_level(gs, f, (t + 5) & 15);
+        int b = vignette_level(bs, f, (t + 10) & 15);
+        uint8_t q = raw_row[x];
+        bool grey_src = ((q >> 4) & 3) == ((q >> 2) & 3) && ((q >> 2) & 3) == (q & 3);
+        if (vig_ground > 0 && grey_src) {
+          // Keep ink clear of the field's whole dither span — but only where
+          // content is meant to be read. Below READ_Q8 the falloff IS the
+          // bezel ring (light LUT depths 0-3), and separating ink there would
+          // hold frames off the black the rim exists to render.
+          if (f >= CRT_VIGNETTE_READ_Q8) {
+            int gnd_lo, gnd_hi;
+            ground_span(vig_ground, f, &gnd_lo, &gnd_hi);
+            r = clear_of_ground(r, rs, gnd_lo, gnd_hi, vig_ground);
+            g = clear_of_ground(g, gs, gnd_lo, gnd_hi, vig_ground);
+            b = clear_of_ground(b, bs, gnd_lo, gnd_hi, vig_ground);
+          }
+        } else if (vig_ground > 0) {
+          // Colored content: hold the hue's channels together instead. Read
+          // the pre-hold values so the three lifts don't feed each other.
+          int r0 = r, g0 = g, b0 = b;
+          r = hold_hue(r0, rs, g0, b0);
+          g = hold_hue(g0, gs, r0, b0);
+          b = hold_hue(b0, bs, r0, g0);
         }
+        row_grey[x] = grey_src;
         row_ca[x] = GCOLOR8_ALPHA | (uint8_t)((r << 4) | (g << 2) | b);
       }
 
@@ -346,6 +461,20 @@ void crt_apply_framebuffer(uint8_t* fb, int w, int h, int flash_phase) {
         int r = ((256 - fr) * ((p0 >> 4) & 3) + fr * ((p1 >> 4) & 3) + 128) >> 8;
         int g = ((256 - fr) * ((p0 >> 2) & 3) + fr * ((p1 >> 2) & 3) + 128) >> 8;
         int b = ((256 - fr) * (p0 & 3) + fr * (p1 & 3) + 128) >> 8;
+        // The blend zeroes channels independently too: a black rim column
+        // against a colored fill lands on (1,0,0) at some fractions — the same
+        // alarm red stage 2's hold_hue exists to prevent, arrived at one stage
+        // later. Keyed on the DOMINANT tap's content, so grey ink keeps the
+        // separation stage 2 gave it instead of having a channel lifted back.
+        if (vig_ground > 0 && !row_grey[sx]) {
+          int sr = max2((p0 >> 4) & 3, (p1 >> 4) & 3);
+          int sg = max2((p0 >> 2) & 3, (p1 >> 2) & 3);
+          int sb = max2(p0 & 3, p1 & 3);
+          int r0 = r, g0 = g, b0 = b;
+          r = hold_hue(r0, sr, g0, b0);
+          g = hold_hue(g0, sg, r0, b0);
+          b = hold_hue(b0, sb, r0, g0);
+        }
         row[x] = GCOLOR8_ALPHA | (uint8_t)((r << 4) | (g << 2) | b);
       }
     }

@@ -4,9 +4,11 @@
 FORMAT_SRCS = $(wildcard src/c/*.c src/c/*.h) \
               $(wildcard src/pkjs/*.js) \
               $(wildcard test/pkjs/*.js) \
-              test/test_watchface.c test/pebble_mock.c test/pebble.h
+              test/test_watchface.c test/pebble_mock.c test/pebble.h \
+              test/vignette_ramp.c
 
-.PHONY: format format-check test test-js build screenshots visual-check visual-baseline
+.PHONY: format format-check test test-js build screenshots visual-check visual-baseline \
+        vignette-ramp
 
 format:
 	clang-format -i $(FORMAT_SRCS)
@@ -16,6 +18,12 @@ format-check:
 
 test: format-check test-js
 	$(MAKE) -C test test
+
+# Prints what the vignette actually renders on each theme — the instrument for
+# tuning crt.h's bands and the falloff LUTs, which interact through a 4-level
+# panel in ways the source does not show. See test/vignette_ramp.c.
+vignette-ramp:
+	$(MAKE) -C test ramp
 
 # Phone-side contract tests; plain node, no framework.
 test-js:

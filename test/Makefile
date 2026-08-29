@@ -11,13 +11,26 @@ RESET_LINT_EXEMPT = s_wind_arrows
 
 all: $(TARGET)
 
+.PHONY: all test ramp clean
+
 # test_watchface.c #includes the app sources directly, so they are build
 # inputs too.
 $(TARGET): $(SRCS) $(wildcard ../src/c/*.c ../src/c/*.h) pebble.h
 	$(CC) $(CFLAGS) $(SRCS) -o $(TARGET)
 
+# The vignette measuring tool (test/vignette_ramp.c). Same host build as the
+# suite, minus the sanitizers — it is an instrument, not a test. Unity comes
+# along because pebble_mock.c asserts through it.
+vignette_ramp: vignette_ramp.c pebble_mock.c unity/src/unity.c \
+               $(wildcard ../src/c/*.c ../src/c/*.h) pebble.h
+	$(CC) -Wall -Wextra -Werror -I. -I./unity/src -g -DTEST_ENV \
+	      vignette_ramp.c pebble_mock.c unity/src/unity.c -o vignette_ramp
+
+ramp: vignette_ramp
+	./vignette_ramp
+
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) vignette_ramp
 
 # Three guards before the binary runs: the registered-runner count (existing),
 # the TU-include gate (test_watchface.c builds the app as one translation unit,

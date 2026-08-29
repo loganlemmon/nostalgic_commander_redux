@@ -8,11 +8,13 @@
 // "shader". Stage order: 1) chromatic aberration, 2) vignette + dither (in
 // content space, so the darkening bends WITH the curvature; light-background
 // themes take a steeper ease-in LUT — dot density over shade, black only at
-// the rim), 3) curvature — the pincushion warp. Vertical vignette depth is
-// pre-stretched 16:28 so all four display bands land at ~21px after the
-// warp's horizontal stretch. The degauss strike's row jitter rides the warp's
-// sampling stage. The toggle gates the pass; off means the proc returns
-// before capturing, so the effect costs exactly nothing.
+// the rim — and hold ink one step clear of the level their field renders as,
+// which a plain gain quantizes away), 3) curvature — the pincushion warp.
+// Each axis maps its edge distance onto the LUTs' 0..16 domain, so
+// CRT_VIGNETTE_SIDE_PX and CRT_VIGNETTE_BAND_PX size the four rims on their
+// own. The degauss strike's row jitter rides the warp's sampling stage. The
+// toggle gates the pass; off means the proc returns before capturing, so the
+// effect costs exactly nothing.
 //
 // main.c owns the layer's lifecycle (create/stack/destroy), like the canvas;
 // the handle is mirrored here the way drawing.h mirrors s_canvas_layer.
@@ -20,20 +22,53 @@ extern Layer* s_crt_layer;
 
 // Curvature geometry. The warp magnifies radially — dest (x,y) samples
 // source at cx + (x-cx)·M/65536 with M = 65536 + CRT_WARP_R2_K·r² (r² = the
-// elliptical Q8 xq+yq the CA zones also use). K=12 ≈ 4.7px of pull at a
-// mid-edge (r²=256) — dialed in on hardware after the 16px vignette stopped
-// the bent rim from eating the side frames — smoothly more toward
-// the corners. The vignette darkens within VIGNETTE_PX content pixels of the
-// nearest edge (counted around the corner arcs) — except vertically, where
-// the depth is pre-stretched 16:28: the warp stretches the horizontal bands
-// to ~21 display px on its own, and the wider read won on hardware.
+// elliptical Q8 xq+yq the CA zones also use). K=8 ≈ 3.1px of pull at a
+// mid-edge (r²=256), smoothly more toward the corners. The vignette darkens
+// within a band of the nearest edge, counted around the corner arcs.
+//
+// K also sets how much solid black the sides carry, which is not obvious: the
+// outermost dest columns' sources run off the frame and clamp to column 0,
+// which the vignette has already taken to depth 0. K=12 clamped four of them,
+// and with the depth-0 and depth-1 columns behind it that was 6px of black
+// before the falloff got a single pixel — no vignette constant could touch it.
+// K=8 clamps three. Lower K is a flatter tube, so this trades bow for rim.
+//
+// VIGNETTE_PX is the falloff LUTs' domain — 17 sample points, depth 0..16 —
+// not a size. Both axes map their edge distance onto that domain, so the two
+// BAND constants below set how far the rim actually reaches without touching
+// the tuned curves. Shrink or grow the rims there and nowhere else.
 #define CRT_VIGNETTE_PX 16
-// Vertical band depth in display px. No clamp columns exist vertically
-// (the warp is horizontal-only), so the band needs to run deeper than the
-// sides' 16 content px to read equally dark.
-#define CRT_VIGNETTE_BAND_PX 28
+// Side band, in CONTENT px. The warp COMPRESSES the rim inward rather than
+// stretching it — 13 source columns land in 12 dest — so this is very nearly
+// its own width on the glass, sitting behind the clamp below.
+//
+// It sets the width of the RAMP, not of the black: the clamp's columns do not
+// move with it at all. Judge it with the per-pixel view, never by mean level —
+// a mean saturates once a column reaches the field, so it cannot show the ramp
+// lengthening at all, and reading one produced a wrong "this constant is
+// inert" conclusion that stood here for a while.
+//
+// On a level-2 field, 12 renders the ladder 1,3,4,5,6 — that jump from 1 to 3
+// is the sharp edge coming out of black. 16 renders 1,2,3,4,5,6, every step
+// present. Wider still works now that the channels dither out of phase; before
+// that, quantization dips punched black columns back through the middle of the
+// ramp and made anything past 12 look worse.
+#define CRT_VIGNETTE_SIDE_PX 16
+// Top/bottom band, in DISPLAY px — the warp is horizontal-only, so nothing
+// resamples this axis and it is the figure you see. Sized so both axes reach
+// full brightness at the same offset (measured: dest 9 on each).
+#define CRT_VIGNETTE_BAND_PX 16
+// Rows held at depth 0 before the falloff starts, standing in for the columns
+// the warp's clamp renders solid on the sides. Nothing clamps vertically, so
+// without it the top carried 2px of black against the sides' 6 and read as
+// missing. Track it to the clamp: at K=8 that is three each way.
+#define CRT_VIGNETTE_EDGE_PX 3
+// Gain below which the falloff is bezel, not content — the light LUT's depths
+// 0-3, where the field is crushed and nothing is meant to be read. Ink/field
+// separation (crt.c's clear_of_ground) stops here so the rim can reach black.
+#define CRT_VIGNETTE_READ_Q8 128
 #define CRT_CORNER_RADIUS 14
-#define CRT_WARP_R2_K 12
+#define CRT_WARP_R2_K 8
 // CA zones by elliptical radius (Q8 of r²-summated terms; mid-edges ≈ 256,
 // corner ≈ 362). r < R2: clean; beyond: a flat 1+1/3px per channel —
 // expressed in thirds (0/4) because stage 1 samples fractionally, and a

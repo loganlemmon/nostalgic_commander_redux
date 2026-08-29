@@ -14,20 +14,23 @@ typedef struct {
   GColor status_green;
   GColor status_yellow;
   GColor status_red;
-  // Field polarity for the CRT vignette: light fields (the grey themes)
-  // take an ease-in falloff — speckle density over shade, black only at the
-  // rim — since a smoothstep sweep across a bright field reads as pepper.
-  bool bg_is_light;
-  // CRT vignette dot floor, as a 2-bit grey level: content brighter than
-  // this never dithers below it during the falloff, so light-field speckle
-  // graduates by dot density one shade down instead of scattering pure
-  // black dots next to the bezel. The rim itself (falloff gain 0) still
-  // renders black. 0 disables — dark themes, and Navigator, whose DarkGray
-  // ground's only deeper shade already IS black.
-  uint8_t vignette_floor;
 } WatchTheme;
 
 extern const WatchTheme* s_active_theme;
+
+// The field's own 2-bit grey level, and the CRT vignette's master switch for a
+// theme. Nonzero means "a grey field the falloff can key off": it selects the
+// ease-in curve (a smoothstep sweep across a bright field reads as pepper) and
+// turns on ink/field separation — crt.c's clear_of_ground keeps ink one step
+// clear of whatever the field renders as, without which the falloff quantizes
+// a caption and its ground onto the same level.
+//
+// Derived from center_bg rather than stored on the theme: there is exactly one
+// right answer per theme, so a stored copy is a second place to keep correct
+// and a way for the pass to separate ink against a level the screen is not
+// showing. 0 covers Black and every non-grey ground alike; nothing needs to
+// tell those apart, since both mean "no separation, take the dark curve".
+uint8_t theme_ground_level(const WatchTheme* t);
 
 // Every theme is a DOS one, built from the canonical CGA/EGA 16.
 extern const WatchTheme s_theme_panel;      // Norton Commander's blue panel
