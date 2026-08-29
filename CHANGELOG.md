@@ -6,12 +6,48 @@ All notable changes to Nostalgic Commander. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- Hourly chime: a POST beep on the hour, off by default, with a volume
+  select and a Test sound button on the settings page.
+
 ### Changed
 
-- CRT vignette on light fields (Dialog) speckles one shade under the ground
-  (was pure-black dots in the band next to the bezel — pepper, not a
-  falloff). Only the rim itself still renders black. Navigator keeps black
-  dots: its DarkGray ground has no deeper shade to graduate by.
+- The CRT falloff dithers its three channels a third of a cycle apart. Run in
+  lockstep on a four-level panel, a grey field can only be black, DarkGray,
+  LightGray or white, so the rim stepped in whole levels however wide the band
+  was — no amount of tuning adds a fifth grey. Splitting the phase carries the
+  same falloff in thirds of a level, at the cost of a faint colour cast at the
+  very edge of the glass.
+- Light themes hold ink one step clear of the level their own field renders.
+  A caption and its ground could quantize onto the same level partway through
+  the falloff, and thin strokes dissolved into it.
+- The CRT rims are sized per axis, and the top and bottom now carry the same
+  solid black edge the sides get for free from the curvature clamp. The top
+  had 2px against the sides' 6 and read as missing.
+- CRT chromatic aberration fades in across a band instead of switching on at a
+  hard oval. That oval crossed the top and bottom complication rows, so a
+  1 1/3px channel shift appeared between one pixel and the next, mid-word. The
+  fade starts two thirds of a pixel in rather than from nothing: the pass adds
+  a per-half third to cancel the panel's element offset, and starting from zero
+  cancelled to exactly no shift partway down the 64px clock digits, where the
+  colour fringe stopped mid-character.
+- The per-theme vignette dot floor is gone. It existed to stop the falloff
+  scattering pure black over a lit field; out-of-phase dithering does that
+  better, and the floor's own clamp flattened the ramp it was meant to protect.
+
+### Fixed
+
+- Status fills changed hue as the vignette darkened them, because the red and
+  green of a fill cross their quantization steps at different pixels. Dialog's
+  low-battery band is brown — the CGA palette has no dark yellow — and rendered
+  as that theme's own alarm red; Panel's precipitation chip is SunsetOrange and
+  shed its green near the rim to render flat red.
+- The top and bottom rim drew a window's two border rows at different
+  brightness, so the edge looked uneven and glyphs crossing it looked like they
+  wobbled. The row-to-depth map was fitting 16 steps into 14 rows and skipping
+  two of them.
+
 ## [1.8.0] - 2026-08-23
 
 ### Added

@@ -4,6 +4,13 @@ CFLAGS = -Wall -Wextra -Werror -I. -I./unity/src -g -DTEST_ENV \
 TARGET = test_watchface
 SRCS = test_watchface.c pebble_mock.c unity/src/unity.c
 
+# Hosts that build the app as one translation unit by #including src/c/*.c.
+# Every such file must include every module, and the TU-include gate below
+# checks each of them: a module missing from test_watchface.c ships firmware-
+# wide with zero host coverage, and one missing from a tool breaks its link —
+# which `make test` would not otherwise notice, since it never builds them.
+TU_HOSTS = test_watchface.c vignette_ramp.c
+
 # State globals the reset-mirror lint must not find by name in
 # reset_all_state(), each with its reason:
 #   s_wind_arrows — const-content lookup table, never reassigned; nothing to reset
@@ -33,9 +40,7 @@ clean:
 	rm -f $(TARGET) vignette_ramp
 
 # Three guards before the binary runs: the registered-runner count (existing),
-# the TU-include gate (test_watchface.c builds the app as one translation unit,
-# so a module absent from its #include list ships firmware-wide with zero host
-# coverage), and the reset-mirror lint (every writable s_* state global defined
+# the TU-include gate, and the reset-mirror lint (every writable s_* state global defined
 # at file scope in src/c must be restored by reset_all_state(), or it leaks
 # between tests). The lint's name-grep can't see the three indirect mechanisms,
 # so they resolve by hand: the wire-table sentinel walk (any global targeted by
@@ -48,15 +53,17 @@ test: $(TARGET)
 	  echo "RUN_TEST drift: $$defined defined tests vs $$runner registered"; exit 1; \
 	fi
 	@srcs=$$(ls ../src/c/*.c | sed 's#.*/##' | sort); \
-	incs=$$(sed -n 's|^#include "\.\./src/c/\([a-z_]*\.c\)".*|\1|p' test_watchface.c | sort); \
-	src_only=$$(printf '%s\n' "$$srcs" | grep -Fvx -- "$$incs" || true); \
-	inc_only=$$(printf '%s\n' "$$incs" | grep -Fvx -- "$$srcs" || true); \
-	if [ -n "$$src_only$$inc_only" ]; then \
-	  echo "TU-include gate: src/c modules and test_watchface.c #includes differ"; \
-	  for f in $$src_only; do echo "  only in src/c: $$f"; done; \
-	  for f in $$inc_only; do echo "  only in test_watchface.c: $$f"; done; \
-	  exit 1; \
-	fi
+	for host in $(TU_HOSTS); do \
+	  incs=$$(sed -n 's|^#include "\.\./src/c/\([a-z_]*\.c\)".*|\1|p' $$host | sort); \
+	  src_only=$$(printf '%s\n' "$$srcs" | grep -Fvx -- "$$incs" || true); \
+	  inc_only=$$(printf '%s\n' "$$incs" | grep -Fvx -- "$$srcs" || true); \
+	  if [ -n "$$src_only$$inc_only" ]; then \
+	    echo "TU-include gate: src/c modules and $$host #includes differ"; \
+	    for f in $$src_only; do echo "  only in src/c: $$f"; done; \
+	    for f in $$inc_only; do echo "  only in $$host: $$f"; done; \
+	    exit 1; \
+	  fi; \
+	done
 	@body=$$(sed -n '/^static void reset_all_state(void) {/,/^}/p' test_watchface.c); \
 	if echo "$$body" | grep -q 'set_slots('; then body="$$body s_complication_slots"; fi; \
 	if echo "$$body" | grep -q 'reset_ui_snapshot('; then body="$$body s_shown_ui"; fi; \

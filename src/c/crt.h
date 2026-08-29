@@ -103,6 +103,14 @@ extern Layer* s_crt_layer;
 #define CRT_CA_R2_Q8 170
 #define CRT_CA_R2V_Q8 170
 #define CRT_CA_RAMP_SHIFT 5
+// Lowest rung the ramp starts on, in thirds. It cannot start at 0: the pass
+// adds a per-half ±1 third to cancel the panel's element offset, so a rung of
+// 1 makes q exactly 0 on the left half — no displacement at all. With a hard
+// rung of 4 that was unreachable; ramping made it reachable, and it landed
+// 40% of the way down the 64px clock digits, where the red fringe simply
+// stopped mid-character. Starting at 2 keeps q off zero everywhere past the
+// dead zone, at the cost of a 0->2 step at the boundary instead of 0->4.
+#define CRT_CA_RAMP_FLOOR 2
 
 // Squared thresholds for the zone compare — no per-pixel sqrt needed.
 #define CRT_CA_R2_X2Q8 ((CRT_CA_R2_Q8 * CRT_CA_R2_Q8 + 255) >> 8)

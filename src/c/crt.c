@@ -69,7 +69,7 @@ int crt_warp_sx(int x, int y, int w, int h) {
 // once: rq ≥ R ⇔ xq+yq ≥ ceil(R²/256) — so no per-pixel sqrt is needed.
 static int crt_ca_t3_h2(int xy_sum) {
   if (xy_sum <= CRT_CA_R2_X2Q8) return 0;
-  int t3 = (xy_sum - CRT_CA_R2_X2Q8) >> CRT_CA_RAMP_SHIFT;
+  int t3 = CRT_CA_RAMP_FLOOR + ((xy_sum - CRT_CA_R2_X2Q8) >> CRT_CA_RAMP_SHIFT);
   return t3 > 4 ? 4 : t3;
 }
 // Vertical wider zones, 1px max, same formulation.

@@ -30,6 +30,7 @@
 #include "../src/c/status.c"
 #include "../src/c/drawing.c"
 #include "../src/c/messaging.c"
+#include "../src/c/chime.c"
 #include "../src/c/crt.c"
 #include "../src/c/main.c"
 
