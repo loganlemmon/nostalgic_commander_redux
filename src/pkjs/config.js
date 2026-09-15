@@ -20,7 +20,7 @@ var OPTION_LABELS = {
   30: 'Next High / Low temperatures',
   34: 'Wind',
   35: 'Humidity + Precipitation (window max)',
-  18: 'AQI UV Index (window max)',
+  18: 'AQI + UV Index (now)',
   23: 'Date',
   27: 'Full Weather',
   24: 'Steps Progress',
@@ -31,14 +31,16 @@ var OPTION_LABELS = {
   28: 'Precipitation (window max)',
   26: 'Humidity',
   16: 'Air Quality (AQI)',
-  17: 'UV Index (window max)',
+  17: 'UV Index (now)',
+  36: 'UV Index (window max)',
   33: 'Week Number',
 };
 
 var TOP_VALUES = ['20', '0', '32', '22', '21', '1', '2', '6', '10', '5', '30', '34', '35', '18'];
 var CENTER_VALUES = ['23', '27', '24', '25'];
-var BOTTOM_VALUES =
-    ['20', '0', '9', '31', '21', '1', '2', '6', '10', '3', '28', '34', '26', '16', '17', '33'];
+var BOTTOM_VALUES = [
+  '20', '0', '9', '31', '21', '1', '2', '6', '10', '3', '28', '34', '26', '16', '17', '36', '33'
+];
 // The narrow bottom slots have no unit-bearing caption stub; wind's units ride
 // its label there.
 var BOTTOM_LABEL_OVERRIDES = {34: 'Wind (m/s or mph)'};
@@ -70,7 +72,7 @@ function slotSelect(messageKey, label, defaultValue, values, overrides) {
 module.exports = [
   {
     type : 'heading',
-    defaultValue : 'Nostalgic Commander Settings',
+    defaultValue : 'Norton Time Settings',
   },
   {
     type : 'section',

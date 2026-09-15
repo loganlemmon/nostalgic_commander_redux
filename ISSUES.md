@@ -3,6 +3,19 @@
 Bugs and suspect behavior, ordered roughly by user impact. Approved upcoming
 work lives in [TODOs.md](TODOs.md); unvetted ideas in [IDEAS.md](IDEAS.md).
 
+## `make test` will not build on macOS — Apple clang rejects a no-op line
+
+`gcc` on macOS is Apple clang, which has `-Wself-assign`; with the suite's
+`-Werror` that turns `prev = prev;` (test_watchface.c, in the CRT CA ladder
+test — a deliberate no-op keeping `prev` live across the row) into a build
+failure. Real gcc, which CI runs, has no such warning. Until the line is
+rewritten, macOS contributors need
+`make -C test test CFLAGS="... -Wno-self-assign ..."`.
+
+`make format-check` is separately unavailable there: `clang-format` is not in
+the Xcode toolchain, and current upstream releases disagree with this repo's
+baseline on files nobody has touched.
+
 ## Chime arrives as a click plus the tone below 100% volume — stock PebbleOS bug
 
 On volumes under 100 the beep comes out as a loud click followed by the

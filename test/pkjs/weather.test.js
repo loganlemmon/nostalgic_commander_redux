@@ -55,16 +55,16 @@ function fullResponse() {
 
 test('field table declares every key once, with the contract sentinel', () => {
   const fields = weather.WEATHER_FIELDS;
-  assert.equal(fields.length, 17);
-  assert.equal(new Set(fields.map(f => f.key)).size, 17);
+  assert.equal(fields.length, 18);
+  assert.equal(new Set(fields.map(f => f.key)).size, 18);
   const sentinel = Object.fromEntries(fields.map(f => [f.key, f.sentinel]));
   for (const k
            of ['WEATHER_TEMP', 'WEATHER_HIGH', 'WEATHER_LOW', 'WEATHER_LOW_TOMORROW',
                'WEATHER_TEMP_HIGH_TOMORROW'])
     assert.equal(sentinel[k], -999, k);
   for (const k
-           of ['WEATHER_AQI', 'WEATHER_UV', 'WEATHER_HUMIDITY', 'WEATHER_PCP', 'WEATHER_COND',
-               'WEATHER_PRECIP_NOW', 'WEATHER_WIND_DIRECTION', 'WEATHER_WIND_SPEED',
+           of ['WEATHER_AQI', 'WEATHER_UV', 'WEATHER_UV_NOW', 'WEATHER_HUMIDITY', 'WEATHER_PCP',
+               'WEATHER_COND', 'WEATHER_PRECIP_NOW', 'WEATHER_WIND_DIRECTION', 'WEATHER_WIND_SPEED',
                'WEATHER_HI_HOUR_TODAY', 'WEATHER_LO_HOUR_TODAY', 'WEATHER_HI_HOUR_TOMORROW',
                'WEATHER_LO_HOUR_TOMORROW'])
     assert.equal(sentinel[k], -1, k);
@@ -124,6 +124,62 @@ test('short windows bound the maxima tightly', () => {
   assert.equal(out2.WEATHER_UV, 0);    // the in-window hours read UV 0; 15:00's 6.3 stays out
   const out24 = weather.parseForecast(fullResponse(), NOW, 24);
   assert.equal(out24.WEATHER_UV, 6);  // 15:00 well inside a 24h window
+});
+
+// The bug this split exists for: at 23:30 a 12h window reaches into tomorrow
+// morning, so the peak is a daylight number while the sun is down. The peak
+// keeps saying so; the plain UV reading must not.
+test('the instant reading is the live hour, not the window peak', () => {
+  const json = fullResponse();
+  const NIGHT = Date.UTC(2026, 7, 8, 23, 30);
+  json.hourly.uv_index[23] = 0;    // 23:00 tonight — the in-progress hour
+  json.hourly.uv_index[34] = 5.4;  // 10:00 tomorrow — inside the coming window
+
+  const out = weather.parseForecast(json, NIGHT);
+  assert.equal(out.WEATHER_UV, 5);      // the peak still reaches ahead
+  assert.equal(out.WEATHER_UV_NOW, 0);  // the sun is down, and the face says so
+});
+
+test('the instant reading is absent, not zero, when the hour has no bucket', () => {
+  const json = fullResponse();
+  // A response whose hourly series stops before the current hour: no bucket
+  // to read, which is "no data" — never a reassuring 0.
+  json.hourly.uv_index = json.hourly.uv_index.map(() => null);
+  const out = weather.parseForecast(json, NOW);
+  assert.equal(out.WEATHER_UV_NOW, -1);
+  assert.equal(weather.parseForecast({}, NOW).WEATHER_UV_NOW, -1);
+});
+
+test('a window of N hours spans exactly N buckets, the in-progress one first', () => {
+  const json = fullResponse();
+  const NIGHT = Date.UTC(2026, 7, 8, 23, 30);
+  json.hourly.uv_index[34] = 5.4;  // 10:00 tomorrow — the 12th bucket, in
+  json.hourly.uv_index[35] = 9;    // 11:00 tomorrow — the 13th, out
+  assert.equal(weather.parseForecast(json, NIGHT, 12).WEATHER_UV, 5);
+  // Widen by one and the spike lands.
+  assert.equal(weather.parseForecast(json, NIGHT, 13).WEATHER_UV, 9);
+});
+
+test('bucket stamps are read through the response offset, not the phone clock', () => {
+  const json = fullResponse();
+  json.utc_offset_seconds = -25200;  // the forecast location is on PDT
+  json.hourly.uv_index[12] = 4;      // 12:00 *there* = 19:00 UTC
+
+  // 19:30 UTC is 12:30 at the forecast location: the 12:00 bucket is live.
+  assert.equal(weather.parseForecast(json, Date.UTC(2026, 7, 8, 19, 30)).WEATHER_UV_NOW, 4);
+  // Without the offset the same instant would read the 19:00 bucket instead,
+  // which is what a bare Date() parse does to a travelling phone.
+  delete json.utc_offset_seconds;
+  assert.equal(weather.parseForecast(json, Date.UTC(2026, 7, 8, 19, 30)).WEATHER_UV_NOW, 0);
+});
+
+test('half-hour timezones land on the right bucket', () => {
+  const json = fullResponse();
+  json.utc_offset_seconds = 19800;  // +05:30
+  json.hourly.uv_index[12] = 7;
+  // 06:45 UTC is 12:15 there — inside the 12:00 bucket, which starts at
+  // 06:30 UTC. Flooring against UTC hours instead would pick 11:00.
+  assert.equal(weather.parseForecast(json, Date.UTC(2026, 7, 8, 6, 45)).WEATHER_UV_NOW, 7);
 });
 
 test('windowHoursFromClaySettings: 12h default in every no-settings shape', () => {

@@ -1,21 +1,23 @@
-# Nostalgic Commander
+# Norton Time
 
 A Norton Commander-styled watchface for Pebble: time, date, and the data you
 care about, in exact EGA colors — cyan frames over panel blue, the dimmed
 shadow of it after dark. Text over icons, contrast over decoration, utility
 over hand-holding.
 
-![Nostalgic Commander](screenshot_current.png)
+![Norton Time](screenshot_current.png)
 
 Built for the modern Pebble lineup; currently targets **emery**
 (Pebble Time 2).
 
-Nostalgic Commander is forked from
+Norton Time is a personal fork of
+[Nostalgic Commander](https://github.com/bemyak/nostalgic_commander) by
+bemyak, which is itself forked from
 [tuiface](https://github.com/lizwinn/tuiface) by Elizardbeth and reworked
 hard toward the DOS aesthetic: VGA bitmap font, EGA palettes, block-glyph
 progress bars, .beat time. The backbone — the complication system, weather
 pipeline, test harness, much of the runtime — is upstream's work. See
-[License](#license); the upstream copyright notice ships unchanged.
+[License](#license); the upstream copyright notices ship unchanged.
 
 ## Gallery
 
@@ -66,7 +68,7 @@ deliberately few:
 |---------|---------|
 | Theme | Turbo Vision, Norton, Dark, Navigator |
 | Units | Imperial, Metric |
-| Weather forecast window | Now, 2, 8, 12 (default), 24 hours |
+| Weather forecast window | Now, 2, 8, 12 (default), 24 hours — sizes the UVMAX and PCP peaks; plain UV always reads the current hour |
 | Date format | ISO, DOS, full text, short |
 | Short date format | Month-Day, Day-Month |
 | Day of week | Before date, after date, hidden |

@@ -979,6 +979,7 @@ void test_get_source_label_should_return_correct_labels(void) {
   TEST_ASSERT_EQUAL_STRING("WEATHER", get_source_label(DATA_SOURCE_WEATHER));
   TEST_ASSERT_EQUAL_STRING("AQI", get_source_label(DATA_SOURCE_AQI));
   TEST_ASSERT_EQUAL_STRING("UV", get_source_label(DATA_SOURCE_UV));
+  TEST_ASSERT_EQUAL_STRING("UVMAX", get_source_label(DATA_SOURCE_UV_MAX));
   TEST_ASSERT_EQUAL_STRING("HUM", get_source_label(DATA_SOURCE_HUMIDITY));
   TEST_ASSERT_EQUAL_STRING("PCP", get_source_label(DATA_SOURCE_WEATHER_PCP));
   TEST_ASSERT_EQUAL_STRING("BEAT", get_source_label(DATA_SOURCE_BEATS));
@@ -999,7 +1000,7 @@ void test_registry_rows_should_be_unique_and_resolve(void) {
   // resolves to a row with a real formatter. EMPTY is the one source allowed
   // to format nothing at all.
   const int count = (int)(sizeof(s_complication_specs) / sizeof(s_complication_specs[0]));
-  TEST_ASSERT_EQUAL_INT(28, count);  // one row per live enum value
+  TEST_ASSERT_EQUAL_INT(29, count);  // one row per live enum value
   for (int i = 0; i < count; i++) {
     const ComplicationSpec* row = &s_complication_specs[i];
     TEST_ASSERT_NOT_NULL(row->label);
@@ -1027,18 +1028,12 @@ void test_registry_should_pin_the_weather_backed_set(void) {
   // The fetch gate reads row flags now instead of a hand-maintained list; the
   // exact set drives the tick gate, the launch fetch, and the settings
   // refetch, so pin it.
-  const ComplicationDataSource expected[] = {DATA_SOURCE_WEATHER,
-                                             DATA_SOURCE_WEATHER_TEMP,
-                                             DATA_SOURCE_WEATHER_COND,
-                                             DATA_SOURCE_AQI,
-                                             DATA_SOURCE_UV,
-                                             DATA_SOURCE_AQI_UV,
-                                             DATA_SOURCE_HUMIDITY,
-                                             DATA_SOURCE_WIND,
-                                             DATA_SOURCE_WEATHER_FULL,
-                                             DATA_SOURCE_WEATHER_PCP,
-                                             DATA_SOURCE_TEMP_HIGH_LOW,
-                                             DATA_SOURCE_HUM_PCP};
+  const ComplicationDataSource expected[] = {
+      DATA_SOURCE_WEATHER,      DATA_SOURCE_WEATHER_TEMP, DATA_SOURCE_WEATHER_COND,
+      DATA_SOURCE_AQI,          DATA_SOURCE_UV,           DATA_SOURCE_UV_MAX,
+      DATA_SOURCE_AQI_UV,       DATA_SOURCE_HUMIDITY,     DATA_SOURCE_WIND,
+      DATA_SOURCE_WEATHER_FULL, DATA_SOURCE_WEATHER_PCP,  DATA_SOURCE_TEMP_HIGH_LOW,
+      DATA_SOURCE_HUM_PCP};
   const int count = (int)(sizeof(s_complication_specs) / sizeof(s_complication_specs[0]));
   int found = 0;
   for (int i = 0; i < count; i++) {
@@ -1720,23 +1715,33 @@ void test_get_source_data_should_format_aqi_and_uv(void) {
   get_source_data(DATA_SOURCE_AQI, buf, sizeof(buf), NULL);
   TEST_ASSERT_EQUAL_STRING("42", buf);
 
-  // UV formatting
+  // UV formatting — the plain chip is the live hour, UVMAX the window peak.
+  s_weather_uv_now = -1;
   s_weather_uv = -1;
   get_source_data(DATA_SOURCE_UV, buf, sizeof(buf), NULL);
   TEST_ASSERT_EQUAL_STRING("--", buf);
+  get_source_data(DATA_SOURCE_UV_MAX, buf, sizeof(buf), NULL);
+  TEST_ASSERT_EQUAL_STRING("--", buf);
 
+  // Night: the peak still reaches into tomorrow's daylight, the live hour
+  // does not. The two chips must not read from the same global.
+  s_weather_uv_now = 0;
   s_weather_uv = 5;
   get_source_data(DATA_SOURCE_UV, buf, sizeof(buf), NULL);
+  TEST_ASSERT_EQUAL_STRING("0", buf);
+  get_source_data(DATA_SOURCE_UV_MAX, buf, sizeof(buf), NULL);
   TEST_ASSERT_EQUAL_STRING("5", buf);
 
-  // Combined AQI / UV formatting
+  // Combined AQI / UV formatting — its stub says "UV", so it carries the
+  // live hour like the plain chip does.
   s_weather_aqi = -1;
-  s_weather_uv = -1;
+  s_weather_uv_now = -1;
   get_source_data(DATA_SOURCE_AQI_UV, buf, sizeof(buf), NULL);
   TEST_ASSERT_EQUAL_STRING("-- --", buf);
 
   s_weather_aqi = 42;
-  s_weather_uv = 5;
+  s_weather_uv_now = 5;
+  s_weather_uv = 9;  // the peak must not leak into the pair
   get_source_data(DATA_SOURCE_AQI_UV, buf, sizeof(buf), NULL);
   // Air joins the halves; the frame stubs (AQI/UV) carry the naming.
   TEST_ASSERT_EQUAL_STRING("42 5", buf);
@@ -2320,36 +2325,54 @@ void test_get_source_color_should_return_appropriate_colors(void) {
   s_weather_aqi = 150;
   TEST_ASSERT_EQUAL_HEX(s_theme_panel.status_red, get_source_color(DATA_SOURCE_AQI));
 
-  // UV likewise: mild sun is quiet; from 3 a thought, from 6 a warning
+  // UV likewise: mild sun is quiet; from 3 a thought, from 6 a warning.
+  // One ladder, both readings — a 6 means the same on either chip.
+  s_weather_uv_now = -1;
   s_weather_uv = -1;
   TEST_ASSERT_EQUAL_HEX(s_theme_panel.text_primary, get_source_color(DATA_SOURCE_UV));
+  TEST_ASSERT_EQUAL_HEX(s_theme_panel.text_primary, get_source_color(DATA_SOURCE_UV_MAX));
 
+  s_weather_uv_now = 2;
   s_weather_uv = 2;
   TEST_ASSERT_EQUAL_HEX(s_theme_panel.text_primary, get_source_color(DATA_SOURCE_UV));
+  TEST_ASSERT_EQUAL_HEX(s_theme_panel.text_primary, get_source_color(DATA_SOURCE_UV_MAX));
 
+  s_weather_uv_now = 3;
   s_weather_uv = 3;
   TEST_ASSERT_EQUAL_HEX(s_theme_panel.status_yellow, get_source_color(DATA_SOURCE_UV));
+  TEST_ASSERT_EQUAL_HEX(s_theme_panel.status_yellow, get_source_color(DATA_SOURCE_UV_MAX));
 
-  s_weather_uv = 5;
+  s_weather_uv_now = 5;
   TEST_ASSERT_EQUAL_HEX(s_theme_panel.status_yellow, get_source_color(DATA_SOURCE_UV));
 
+  s_weather_uv_now = 6;
   s_weather_uv = 6;
   TEST_ASSERT_EQUAL_HEX(s_theme_panel.status_red, get_source_color(DATA_SOURCE_UV));
+  TEST_ASSERT_EQUAL_HEX(s_theme_panel.status_red, get_source_color(DATA_SOURCE_UV_MAX));
 
-  s_weather_uv = 8;
+  s_weather_uv_now = 8;
   TEST_ASSERT_EQUAL_HEX(s_theme_panel.status_red, get_source_color(DATA_SOURCE_UV));
 
-  // AQI / UV combined: only a flagged half colors the pair
+  // A quiet night under a fierce tomorrow: the two chips band independently,
+  // which is the whole point of splitting them.
+  s_weather_uv_now = 0;
+  s_weather_uv = 9;
+  TEST_ASSERT_EQUAL_HEX(s_theme_panel.text_primary, get_source_color(DATA_SOURCE_UV));
+  TEST_ASSERT_EQUAL_HEX(s_theme_panel.status_red, get_source_color(DATA_SOURCE_UV_MAX));
+
+  // AQI / UV combined: only a flagged half colors the pair, and the UV half
+  // is the live hour — a high peak alone must not light it up.
   s_weather_aqi = 34;
-  s_weather_uv = 1;
+  s_weather_uv_now = 1;
+  s_weather_uv = 9;
   TEST_ASSERT_EQUAL_HEX(s_theme_panel.text_primary, get_source_color(DATA_SOURCE_AQI_UV));
 
   s_weather_aqi = 65;  // yellow
-  s_weather_uv = 1;
+  s_weather_uv_now = 1;
   TEST_ASSERT_EQUAL_HEX(s_theme_panel.status_yellow, get_source_color(DATA_SOURCE_AQI_UV));
 
   s_weather_aqi = 34;
-  s_weather_uv = 8;  // red
+  s_weather_uv_now = 8;  // red
   TEST_ASSERT_EQUAL_HEX(s_theme_panel.status_red, get_source_color(DATA_SOURCE_AQI_UV));
 
   // Humidity is a plain readout like heart rate: outdoor RH has no
@@ -2622,13 +2645,24 @@ void test_weather_field_table_should_pin_each_global_and_sentinel(void) {
   const struct {
     int* global;
     int sentinel;
-  } want[] = {
-      {&s_weather_temp, -999},     {&s_weather_cond_code, -1}, {&s_weather_aqi, -1},
-      {&s_weather_uv, -1},         {&s_weather_humidity, -1},  {&s_weather_wind_direction, -1},
-      {&s_weather_wind_speed, -1}, {&s_weather_pcp, -1},       {&s_precip_now, -1},
-      {&s_temp_high, -999},        {&s_temp_low, -999},        {&s_temp_low_tmrw, -999},
-      {&s_temp_high_tmrw, -999},   {&s_hi_hour_today, -1},     {&s_lo_hour_today, -1},
-      {&s_hi_hour_tmrw, -1},       {&s_lo_hour_tmrw, -1}};
+  } want[] = {{&s_weather_temp, -999},
+              {&s_weather_cond_code, -1},
+              {&s_weather_aqi, -1},
+              {&s_weather_uv, -1},
+              {&s_weather_uv_now, -1},
+              {&s_weather_humidity, -1},
+              {&s_weather_wind_direction, -1},
+              {&s_weather_wind_speed, -1},
+              {&s_weather_pcp, -1},
+              {&s_precip_now, -1},
+              {&s_temp_high, -999},
+              {&s_temp_low, -999},
+              {&s_temp_low_tmrw, -999},
+              {&s_temp_high_tmrw, -999},
+              {&s_hi_hour_today, -1},
+              {&s_lo_hour_today, -1},
+              {&s_hi_hour_tmrw, -1},
+              {&s_lo_hour_tmrw, -1}};
   const unsigned rows = sizeof(s_weather_fields) / sizeof(s_weather_fields[0]);
   TEST_ASSERT_EQUAL_UINT(sizeof(want) / sizeof(want[0]), rows);
   for (unsigned w = 0; w < sizeof(want) / sizeof(want[0]); w++) {
@@ -3009,6 +3043,7 @@ void test_inbox_should_clamp_garbage_weather_ints(void) {
   mock_dict_add_int(MESSAGE_KEY_WEATHER_COND, 0);
   mock_dict_add_int(MESSAGE_KEY_WEATHER_AQI, -5);
   mock_dict_add_int(MESSAGE_KEY_WEATHER_UV, 999);
+  mock_dict_add_int(MESSAGE_KEY_WEATHER_UV_NOW, 999);
   mock_dict_add_int(MESSAGE_KEY_WEATHER_WIND_DIRECTION, 720);
   mock_dict_add_int(MESSAGE_KEY_WEATHER_WIND_SPEED, 28123);
   mock_dict_add_int(MESSAGE_KEY_WEATHER_HI_HOUR_TODAY, 25);
@@ -3017,7 +3052,10 @@ void test_inbox_should_clamp_garbage_weather_ints(void) {
 
   TEST_ASSERT_EQUAL_INT(999, s_weather_temp);
   TEST_ASSERT_EQUAL_INT(0, s_weather_aqi);
-  TEST_ASSERT_EQUAL_INT(11, s_weather_uv);
+  // Two cells of layout budget, not a scale bound: the UV Index is
+  // open-ended, so the cap only has to keep the reading inside its slot.
+  TEST_ASSERT_EQUAL_INT(99, s_weather_uv);
+  TEST_ASSERT_EQUAL_INT(99, s_weather_uv_now);
   TEST_ASSERT_EQUAL_INT(360, s_weather_wind_direction);
   TEST_ASSERT_EQUAL_INT(999, s_weather_wind_speed);
   TEST_ASSERT_EQUAL_INT(23, s_hi_hour_today);

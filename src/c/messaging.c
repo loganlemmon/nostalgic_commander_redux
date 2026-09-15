@@ -70,6 +70,7 @@ static const MessageField s_weather_fields[] = {
     {&MESSAGE_KEY_WEATHER_COND, PERSIST_KEY_WEATHER_COND_CODE, &s_weather_cond_code, -1},
     {&MESSAGE_KEY_WEATHER_AQI, PERSIST_KEY_WEATHER_AQI, &s_weather_aqi, -1},
     {&MESSAGE_KEY_WEATHER_UV, PERSIST_KEY_WEATHER_UV, &s_weather_uv, -1},
+    {&MESSAGE_KEY_WEATHER_UV_NOW, PERSIST_KEY_WEATHER_UV_NOW, &s_weather_uv_now, -1},
     {&MESSAGE_KEY_WEATHER_HUMIDITY, PERSIST_KEY_WEATHER_HUMIDITY, &s_weather_humidity, -1},
     {&MESSAGE_KEY_WEATHER_WIND_DIRECTION, PERSIST_KEY_WEATHER_WIND_DIRECTION,
      &s_weather_wind_direction, -1},
@@ -148,7 +149,11 @@ static void clamp_weather_values(void) {
   clamp_int_bounded(&s_temp_high_tmrw, -999, -99, 999);
   clamp_int_bounded(&s_weather_cond_code, -1, 0, 99);  // WMO table is < 100
   clamp_int_bounded(&s_weather_aqi, -1, 0, 500);
-  clamp_int_bounded(&s_weather_uv, -1, 0, 11);  // WMO UV is 1..11
+  // The UV Index is open-ended — "11+" is the top *category*, not the top
+  // value, and 12-14 are real at altitude and in the tropics. The cap is a
+  // layout budget (two cells), not a scale bound.
+  clamp_int_bounded(&s_weather_uv, -1, 0, 99);
+  clamp_int_bounded(&s_weather_uv_now, -1, 0, 99);
   clamp_int_bounded(&s_weather_humidity, -1, 0, 100);
   clamp_int_bounded(&s_weather_pcp, -1, 0, 100);
   clamp_int_bounded(&s_precip_now, -1, 0, 999);

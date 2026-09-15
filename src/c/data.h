@@ -30,6 +30,7 @@ typedef enum {
   DATA_SOURCE_WIND = 34,
   DATA_SOURCE_HUM_PCP = 35,
   DATA_SOURCE_WEEK_NUMBER = 33,
+  DATA_SOURCE_UV_MAX = 36,
   // Retired ids: 19 (UTC_OFFSET), 29 (SUN_TIMES).
   DATA_SOURCE_EMPTY = 20
 } ComplicationDataSource;
@@ -62,7 +63,10 @@ extern int s_active_minutes;
 extern int s_weather_temp;
 extern int s_weather_cond_code;  // WMO weather code; -1 indicates no data
 extern int s_weather_aqi;
+// The forecast-window peak (what to plan around) and the in-progress
+// hour (what the sun is doing now); both -1 when there is no reading.
 extern int s_weather_uv;
+extern int s_weather_uv_now;
 extern int s_weather_humidity;
 extern int s_weather_wind_direction;
 extern int s_weather_wind_speed;

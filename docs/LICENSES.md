@@ -33,7 +33,7 @@ assets (Apache 2.0), not bundled here.
 Open-Meteo's CC BY 4.0 attribution: include "Weather data by
 [Open-Meteo.com](https://open-meteo.com/)" where people encounter the work.
 Today that's the README (the settings page deliberately carries no
-about/credits section). **If Nostalgic Commander ever ships to the Rebble store, put the
+about/credits section). **If Norton Time ever ships to the Rebble store, put the
 attribution in the store listing description** — end users don't see the
 README.
 

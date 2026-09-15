@@ -1,4 +1,4 @@
-# Contributing to Nostalgic Commander
+# Contributing to Norton Time
 
 To be honest, I didn't think anyone was going to be interested in downloading
 this watchface, let alone want to contribute to it. It seemed a bit silly to
@@ -45,7 +45,7 @@ Forking? The identity smear, in one sweep:
 
 - `package.json` — `name`, `author`, `pebble.displayName`, and a fresh
   `pebble.uuid` (`uuidgen`); a reused uuid collides with installed copies of
-  Nostalgic Commander on the same watch.
+  Norton Time on the same watch.
 - `src/pkjs/config.js` — the settings page heading.
 - `CHANGELOG.md` — the compare-link host at the file tail (or start fresh).
 - `LICENSE.md` — the copyright notice lines at the head.

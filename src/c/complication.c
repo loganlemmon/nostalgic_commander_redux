@@ -142,6 +142,11 @@ static void fmt_aqi(char* buf, int len, int* percent) {
 
 static void fmt_uv(char* buf, int len, int* percent) {
   (void)percent;
+  fmt_sentinel_reading(buf, len, s_weather_uv_now);
+}
+
+static void fmt_uv_max(char* buf, int len, int* percent) {
+  (void)percent;
   fmt_sentinel_reading(buf, len, s_weather_uv);
 }
 
@@ -150,7 +155,7 @@ static void fmt_aqi_uv(char* buf, int len, int* percent) {
   char aqi_str[8];
   char uv_str[8];
   fmt_sentinel_reading(aqi_str, sizeof(aqi_str), s_weather_aqi);
-  fmt_sentinel_reading(uv_str, sizeof(uv_str), s_weather_uv);
+  fmt_sentinel_reading(uv_str, sizeof(uv_str), s_weather_uv_now);
   // Air joins the halves; the frame stubs carry the naming.
   snprintf(buf, len, "%s %s", aqi_str, uv_str);
 }
@@ -302,6 +307,13 @@ static const ComplicationSpec s_complication_specs[] = {
      .label = "UV",
      .format = fmt_uv,
      .backs = DATA_SOURCE_UV,
+     .draw = draw_banded_complication,
+     .needs_weather = true},
+    {.source = DATA_SOURCE_UV_MAX,
+     .health_metric = HEALTH_METRIC_NONE,
+     .label = "UVMAX",
+     .format = fmt_uv_max,
+     .backs = DATA_SOURCE_UV_MAX,
      .draw = draw_banded_complication,
      .needs_weather = true},
     {.source = DATA_SOURCE_AQI_UV,

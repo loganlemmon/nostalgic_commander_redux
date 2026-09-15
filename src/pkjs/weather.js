@@ -1,9 +1,11 @@
 'use strict';
 
-// The UV and PCP complications show the peak over the coming window, not a
-// calendar day max (which is mostly about the past by evening) and not the
-// instant value (which reads 0 whenever the sun is low). How wide the window
-// is, is a setting; this is its shipped default.
+// The PCP complication and the UV *peak* show the maximum over the coming
+// window, not a calendar day max — which is mostly about the past by evening.
+// How wide the window is, is a setting; this is its shipped default. The
+// plain UV complication reports the in-progress hour instead: a peak that
+// reaches into tomorrow morning answers "how bad does it get", never "should
+// I put a hat on", and at 11pm only the second question is being asked.
 var DEFAULT_WINDOW_HOURS = 12;
 
 // One row per value the watch consumes. The AppMessage dict, the sentinel
@@ -15,7 +17,8 @@ var WEATHER_FIELDS = [
   {key: 'WEATHER_TEMP', sentinel: -999},
   {key: 'WEATHER_COND', sentinel: -1},  // raw WMO weather code
   {key: 'WEATHER_AQI', sentinel: -1},
-  {key: 'WEATHER_UV', sentinel: -1},
+  {key: 'WEATHER_UV', sentinel: -1},      // peak over the forecast window
+  {key: 'WEATHER_UV_NOW', sentinel: -1},  // the in-progress hour alone
   {key: 'WEATHER_HUMIDITY', sentinel: -1},
   {key: 'WEATHER_WIND_DIRECTION', sentinel: -1},
   {key: 'WEATHER_WIND_SPEED', sentinel: -1},
@@ -84,6 +87,19 @@ function unitsFromClaySettings(settings) {
 // here instead of becoming a bogus reading.)
 function num(value) { return typeof value === 'number' && isFinite(value) ? value : undefined; }
 
+// One hourly bucket's stamp ("YYYY-MM-DDTHH:MM", in the forecast location's
+// local time with no offset on it) as epoch ms, via the response's own
+// utc_offset_seconds. Handing the string to Date() instead reads it as
+// PHONE-local, which shifts the whole window whenever the phone is not in the
+// forecast's timezone — and engines disagree about offset-less stamps anyway
+// (ES5 said UTC, ES6 says local), so the same build reads differently on
+// different phones. NaN for anything unparsable; the window test rejects it.
+function hourlyEpoch(timeStr, utcOffsetSeconds) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(timeStr));
+  if (!m) return NaN;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) - utcOffsetSeconds * 1000;
+}
+
 // The forecast-window select ships hours as strings; 0 is the page's "Now".
 // Before the first settings save the key is absent, so: shipped default. A
 // value off the select (a hand-edited store) parses or falls back.
@@ -123,15 +139,32 @@ function parseForecast(json, nowMs, windowHours) {
 
   var hourly = json.hourly || {};
   if (hourly.time) {
-    // UV and PCP share the coming-window max; the in-progress hour counts.
-    // The API nulls probability where no precip is forecast at all, so a
-    // window of nulls still reads "no data".
-    var windowStart = nowMs - 3600 * 1000;
-    var windowEnd = nowMs + windowHours * 3600 * 1000;
+    // timezone=auto, so this is the forecast location's offset, not the
+    // phone's. Absent (a GMT response) it is genuinely zero.
+    var utcOffset = num(json.utc_offset_seconds);
+    if (utcOffset === undefined) utcOffset = 0;
+
+    // The UV peak and PCP share the coming-window max, and `windowHours`
+    // counts the in-progress hour: 0 ("Now") reads that bucket alone, 12
+    // reads it plus the next 11. Anchoring the start on the hour the
+    // location is currently in — rather than on a rolling nowMs - 1h — keeps
+    // the bucket count honest; the rolling start swept a 13th bucket into
+    // every "12 hour" window. The API nulls probability where no precip is
+    // forecast at all, so a window of nulls still reads "no data".
+    var hourMs = 3600 * 1000;
+    var offsetMs = utcOffset * 1000;
+    var windowStart = Math.floor((nowMs + offsetMs) / hourMs) * hourMs - offsetMs;
+    var windowEnd = windowStart + Math.max(windowHours - 1, 0) * hourMs;
     var uvArr = hourly.uv_index || [];
     var pcpArr = hourly.precipitation_probability || [];
     for (var i = 0; i < hourly.time.length; i++) {
-      var ts = new Date(hourly.time[i]).getTime();
+      var ts = hourlyEpoch(hourly.time[i], utcOffset);
+      // The bucket the location is living in right now: the sun as it
+      // actually is, which is what the plain UV complication reports.
+      if (ts === windowStart) {
+        v = num(uvArr[i]);
+        if (v !== undefined) out.WEATHER_UV_NOW = Math.round(v);
+      }
       if (!(ts >= windowStart && ts <= windowEnd)) continue;  // NaN-safe
       v = num(uvArr[i]);
       if (v !== undefined && v > out.WEATHER_UV) out.WEATHER_UV = v;

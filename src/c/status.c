@@ -19,6 +19,16 @@ static GColor temp_band_color(int temp) {
   return s_active_theme->text_primary;
 }
 
+// WHO's exposure categories, collapsed to the face's two: moderate (3+) is
+// worth a thought, high (6+) is worth acting on. A missing reading stays
+// neutral — "--" is neither.
+static GColor uv_band_color(int uv) {
+  if (uv == -1) return s_active_theme->text_primary;
+  if (uv >= 6) return s_active_theme->status_red;
+  if (uv >= 3) return s_active_theme->status_yellow;
+  return s_active_theme->text_primary;
+}
+
 GColor get_source_color(ComplicationDataSource source) {
   if (!s_active_theme) return GColorWhite;
 
@@ -68,11 +78,13 @@ GColor get_source_color(ComplicationDataSource source) {
       if (s_weather_aqi > 100) return s_active_theme->status_red;
       if (s_weather_aqi > 50) return s_active_theme->status_yellow;
       return s_active_theme->text_primary;
+    // One WHO band ladder, both UV readings: "the sun right now" and "the
+    // worst it gets in the window" are the same scale, so a 6 means the same
+    // thing whichever chip shows it.
     case DATA_SOURCE_UV:
-      if (s_weather_uv == -1) return s_active_theme->text_primary;
-      if (s_weather_uv >= 6) return s_active_theme->status_red;
-      if (s_weather_uv >= 3) return s_active_theme->status_yellow;
-      return s_active_theme->text_primary;
+      return uv_band_color(s_weather_uv_now);
+    case DATA_SOURCE_UV_MAX:
+      return uv_band_color(s_weather_uv);
     case DATA_SOURCE_WEATHER_PCP:
       if (weather_shows_precip_amount()) {
         // WMO intensity bands (mm over the past hour): light rain is calm;
@@ -96,9 +108,9 @@ GColor get_source_color(ComplicationDataSource source) {
       return temp_band_color(hi);
     }
     case DATA_SOURCE_AQI_UV: {
-      if (s_weather_aqi == -1 && s_weather_uv == -1) return s_active_theme->text_primary;
-      bool is_red = (s_weather_aqi > 100 || s_weather_uv >= 6);
-      bool is_yellow = (s_weather_aqi > 50 || s_weather_uv >= 3);
+      if (s_weather_aqi == -1 && s_weather_uv_now == -1) return s_active_theme->text_primary;
+      bool is_red = (s_weather_aqi > 100 || s_weather_uv_now >= 6);
+      bool is_yellow = (s_weather_aqi > 50 || s_weather_uv_now >= 3);
       if (is_red) return s_active_theme->status_red;
       if (is_yellow) return s_active_theme->status_yellow;
       return s_active_theme->text_primary;

@@ -1,8 +1,43 @@
 # Changelog
 
-All notable changes to Nostalgic Commander. Format follows
+All notable changes to Norton Time. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [Semantic](https://semver.org/).
+
+## [Unreleased]
+
+### Changed
+
+- **Renamed to Norton Time.** Personal fork of Nostalgic Commander; the UUID
+  is deliberately unchanged, so it installs over an existing copy and keeps
+  its settings rather than landing beside it.
+
+### Added
+
+- **UVMAX complication**: the forecast-window peak, on its own chip. Pick it
+  for a bottom slot alongside (or instead of) UV.
+
+### Fixed
+
+- **UV read tomorrow's sunshine at midnight.** The UV complication showed the
+  maximum over the coming window, so from roughly 8pm the window swept into
+  the next morning's climb and the chip reported a daylight number with the
+  sun down — UV 5 at 11pm in Venice, CA, which is tomorrow at 11am. UV now
+  reads the hour you are actually in; the window peak moved to the new UVMAX
+  chip, and the paired AQI/UV chip follows UV. The forecast-window setting
+  still sizes UVMAX and PCP.
+- **A window of N hours now spans exactly N hourly buckets.** The window
+  started at a rolling `now - 1h` to catch the in-progress hour, which swept a
+  13th bucket into every "12 hours". It anchors on the current hour instead.
+- **Hourly forecast timestamps are read through the response's UTC offset.**
+  Open-Meteo stamps them in the *forecast location's* local time with no
+  offset attached; handing those to `Date()` reads them as *phone*-local, so
+  the whole window shifted whenever the phone was not in the forecast's
+  timezone — and JS engines disagree about offset-less stamps (ES5 said UTC,
+  ES6 says local), so the same build behaved differently on different phones.
+- **The UV reading is no longer capped at 11.** The UV Index is open-ended —
+  "11+" is the top *category*, not the top value, and 12-14 are real at
+  altitude and in the tropics.
 
 ## [1.9.0] - 2026-08-30
 
